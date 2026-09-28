@@ -95,6 +95,18 @@ fn mtime_ms(meta: &fs::Metadata) -> i64 {
 pub struct SyncResult {
     pub added: Vec<i64>,
     pub gone: Vec<i64>,
+    pub pending: bool,
+}
+
+#[cfg(windows)]
+fn ready(path: &Path) -> bool {
+    use std::os::windows::fs::OpenOptionsExt;
+    fs::OpenOptions::new().read(true).share_mode(0).open(path).is_ok()
+}
+
+#[cfg(not(windows))]
+fn ready(_: &Path) -> bool {
+    true
 }
 
 pub fn sync(conn: &Connection, deck: &str) -> AppResult<SyncResult> {
@@ -125,6 +137,7 @@ pub fn sync(conn: &Connection, deck: &str) -> AppResult<SyncResult> {
     }
 
     let mut added = Vec::new();
+    let mut pending = false;
     for (name, size, mtime) in files {
         match rows.get(&name.to_lowercase()) {
             Some((id, s, m)) if (*s, *m) != (size, mtime) => {
@@ -134,6 +147,7 @@ pub fn sync(conn: &Connection, deck: &str) -> AppResult<SyncResult> {
                 )?;
             }
             Some(_) => {}
+            None if !ready(&dir.join(&name)) => pending = true,
             None => {
                 conn.execute(
                     "INSERT INTO card(deck_path, file_name, size, mtime, taken_at, position)
@@ -145,7 +159,7 @@ pub fn sync(conn: &Connection, deck: &str) -> AppResult<SyncResult> {
             }
         }
     }
-    Ok(SyncResult { added, gone })
+    Ok(SyncResult { added, gone, pending })
 }
 
 pub fn window(conn: &Connection, deck: &str, from: i64, count: i64) -> AppResult<Vec<CardView>> {

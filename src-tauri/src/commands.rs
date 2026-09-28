@@ -7,12 +7,15 @@ use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use tauri::State;
 
 pub struct AppState {
     pub db: Mutex<Connection>,
     pub data_dir: PathBuf,
+    pub paused: Arc<AtomicBool>,
+    pub wake: Arc<AtomicBool>,
 }
 
 const SETTING_KEYS: [&str; 6] = ["deck_path", "table_path", "hints_enabled", "theme", "muted", "mode"];
@@ -54,12 +57,22 @@ pub struct DeckCounts {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StateView {
+    cache_dir: String,
+    developing: DevelopView,
     settings: HashMap<String, String>,
     deck: DeckCounts,
     piles: Vec<PileView>,
 }
 
-fn snapshot(conn: &Connection) -> AppResult<StateView> {
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DevelopView {
+    done: i64,
+    total: i64,
+    paused: bool,
+}
+
+fn snapshot(conn: &Connection, state: &AppState) -> AppResult<StateView> {
     let mut settings = HashMap::new();
     for key in SETTING_KEYS {
         if let Some(v) = get_setting(conn, key)? {
@@ -73,7 +86,21 @@ fn snapshot(conn: &Connection) -> AppResult<StateView> {
         }
         Err(_) => (DeckCounts { total: 0, left: 0, placed: 0 }, Vec::new()),
     };
-    Ok(StateView { settings, deck, piles })
+    let (done, total) = match get_setting(conn, "deck_path")? {
+        Some(d) => conn.query_row(
+            "SELECT COALESCE(SUM(stage != 'new'), 0), COUNT(*) FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred')",
+            params![d],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?,
+        None => (0, 0),
+    };
+    Ok(StateView {
+        cache_dir: state.data_dir.join("cache").to_string_lossy().into_owned(),
+        developing: DevelopView { done, total, paused: state.paused.load(Ordering::Relaxed) },
+        settings,
+        deck,
+        piles,
+    })
 }
 
 #[tauri::command]
@@ -87,7 +114,8 @@ pub fn get_state(state: State<AppState>) -> AppResult<StateView> {
             piles::sync(&conn, &t)?;
         }
     }
-    snapshot(&conn)
+    state.wake.store(true, Ordering::Relaxed);
+    snapshot(&conn, &state)
 }
 
 fn nested(a: &Path, b: &Path) -> bool {
@@ -250,4 +278,11 @@ pub fn set_pile_key(state: State<AppState>, pile_id: i64, key: Option<String>) -
     let (_, t) = paths(&conn)?;
     piles::set_key(&conn, pile_id, key.as_deref())?;
     piles::list(&conn, &t)
+}
+
+#[tauri::command]
+pub fn develop_control(state: State<AppState>, pause: bool) -> AppResult<()> {
+    state.paused.store(pause, Ordering::Relaxed);
+    state.wake.store(true, Ordering::Relaxed);
+    Ok(())
 }

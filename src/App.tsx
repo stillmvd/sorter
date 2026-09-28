@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Titlebar } from "./components/Titlebar";
 import { DeckScreen } from "./components/deck/DeckScreen";
+import { Develop } from "./components/screens/Develop";
 import { Start } from "./components/screens/Start";
 import { errorText, ipc, type AppState } from "./lib/ipc";
 
@@ -8,6 +9,7 @@ export default function App() {
   const [state, setState] = useState<AppState | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
+  const [developView, setDevelopView] = useState(false);
 
   const reload = useCallback(async () => {
     try {
@@ -41,11 +43,13 @@ export default function App() {
           onStart={async () => {
             await ipc.setSetting("mode", "deck");
             setStarted(true);
+            setDevelopView(true);
             await reload();
           }}
         />
       )}
-      {state && !showStart && ready && <DeckScreen initial={state} onReload={reload} />}
+      {state && !showStart && ready && developView && <Develop state={state} onDone={() => setDevelopView(false)} />}
+      {state && !showStart && ready && !developView && <DeckScreen initial={state} onReload={reload} />}
     </div>
   );
 }

@@ -1,10 +1,11 @@
 import { openPath } from "@tauri-apps/plugin-opener";
 import { Layers, Plus } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { errorText, ipc, type AppState, type Card, type Method, type Move, type Pile } from "../../lib/ipc";
+import { errorText, ipc, onCard, onDeckChanged, onPilesChanged, onProgress, type AppState, type Card, type Method, type Move, type Pile } from "../../lib/ipc";
 import { isTypingChar, keyOf } from "../../lib/keys";
 import { play } from "../../lib/sound";
 import { Flights, motionOff, pileElement, shake, snapshot, type Flight } from "../fx/Flight";
+import { FilmStrip, seekFrame } from "./FilmStrip";
 import { KeyLegend } from "./KeyLegend";
 import { Button } from "../ui/Button";
 import { Heading, PageHeader, Tag } from "../ui/PageHeader";
@@ -37,6 +38,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
   const [broken, setBroken] = useState<Set<number>>(() => new Set());
   const [zone, setZone] = useState(420);
   const [flights, setFlights] = useState<Flight[]>([]);
+  const [developing, setDeveloping] = useState(initial.developing);
   const flightSeq = useRef(0);
   const landed = useCallback((f: Flight) => {
     setFlights((list) => list.filter((x) => x.id !== f.id));
@@ -62,6 +64,22 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
     });
     void ipc.journal(null, 20).then((recent) => setLast(recent.find((m) => m.state === "done") ?? null));
   }, [refill]);
+
+  useEffect(() => {
+    const offCard = onCard((card) => setCards((cs) => cs.map((c) => (c.id === card.id ? { ...c, ...card } : c))));
+    const offProgress = onProgress(setDeveloping);
+    const offDeck = onDeckChanged(({ added, gone }) => {
+      setCards((cs) => [...cs.filter((c) => !gone.includes(c.id)), ...added.filter((a) => !cs.some((c) => c.id === a.id))]);
+      void ipc.getState().then((st) => setCounts(st.deck));
+    });
+    const offPiles = onPilesChanged(setPiles);
+    return () => {
+      void offDeck.then((f) => f());
+      void offPiles.then((f) => f());
+      void offCard.then((f) => f());
+      void offProgress.then((f) => f());
+    };
+  }, []);
 
   useEffect(() => {
     if (!toast) return;
@@ -207,6 +225,11 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
       setQuery("");
       return;
     }
+    if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && current) {
+      e.preventDefault();
+      seekFrame(current, e.key === "ArrowLeft" ? -1 : 1);
+      return;
+    }
     if (e.key === "/") {
       e.preventDefault();
       search.current?.focus();
@@ -255,6 +278,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
         tag={
           <Tag icon={<Layers strokeWidth={1.5} />}>
             Разложено {counts.placed} из {counts.placed + counts.left}
+            {developing.done < developing.total && ` · проявлено ${developing.done} из ${developing.total}`}
           </Tag>
         }
         light="В колоде"
@@ -302,6 +326,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
                     .join(" · ")}
                 </div>
               </div>
+              <FilmStrip card={current} cacheDir={initial.cacheDir} />
               <div className="flex gap-2">
                 <Button onClick={defer} hotkey="Tab" disabled={cards.length < 2}>
                   В конец колоды

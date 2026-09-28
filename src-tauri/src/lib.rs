@@ -1,13 +1,16 @@
 mod commands;
 mod db;
 mod deck;
+mod develop;
 mod error;
 mod media;
 mod moves;
 mod piles;
+mod watch;
 
 use commands::AppState;
-use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
 pub fn run() {
@@ -31,7 +34,11 @@ pub fn run() {
             if let Err(e) = moves::recover(&conn) {
                 eprintln!("recover: {e}");
             }
-            app.manage(AppState { db: Mutex::new(conn), data_dir });
+            let paused = Arc::new(AtomicBool::new(false));
+            let wake = Arc::new(AtomicBool::new(true));
+            develop::spawn(app.handle().clone(), data_dir.join("sorter.db"), data_dir.join("cache"), paused.clone(), wake.clone());
+            watch::spawn(app.handle().clone(), data_dir.join("sorter.db"), wake.clone());
+            app.manage(AppState { db: Mutex::new(conn), data_dir, paused, wake });
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
             }
@@ -52,6 +59,7 @@ pub fn run() {
             commands::create_pile,
             commands::rename_pile,
             commands::set_pile_key,
+            commands::develop_control,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

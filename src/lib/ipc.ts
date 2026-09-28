@@ -1,4 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 export type Orientation = "portrait" | "landscape" | "square";
 
@@ -53,7 +54,11 @@ export type Hint = { pileId: number; score: number };
 
 export type Settings = Partial<Record<"deck_path" | "table_path" | "hints_enabled" | "theme" | "muted" | "mode", string>>;
 
+export type Developing = { done: number; total: number; paused: boolean };
+
 export type AppState = {
+  cacheDir: string;
+  developing: Developing;
   settings: Settings;
   deck: { total: number; left: number; placed: number };
   piles: Pile[];
@@ -67,6 +72,15 @@ export function errorText(e: unknown): string {
 }
 
 export const media = (path: string) => convertFileSrc(path, "media");
+
+export const frameSrc = (cacheDir: string, card: Card, i: number) =>
+  `${media([cacheDir, card.id, `${i}.jpg`].join("\\"))}?s=${card.stage}${card.frames}`;
+
+export const onCard = (fn: (card: Card) => void) => listen<Card>("develop://card", (e) => fn(e.payload));
+export const onDeckChanged = (fn: (d: { added: Card[]; gone: number[] }) => void) =>
+  listen<{ added: Card[]; gone: number[] }>("deck://changed", (e) => fn(e.payload));
+export const onPilesChanged = (fn: (p: Pile[]) => void) => listen<Pile[]>("piles://changed", (e) => fn(e.payload));
+export const onProgress = (fn: (p: Developing) => void) => listen<Developing>("develop://progress", (e) => fn(e.payload));
 
 export const ipc = {
   getState: () => invoke<AppState>("get_state"),
@@ -84,4 +98,5 @@ export const ipc = {
   createPile: (name: string) => invoke<Pile[]>("create_pile", { name }),
   renamePile: (pileId: number, name: string) => invoke<Pile[]>("rename_pile", { pileId, name }),
   setPileKey: (pileId: number, key: string | null) => invoke<Pile[]>("set_pile_key", { pileId, key }),
+  developControl: (pause: boolean) => invoke<void>("develop_control", { pause }),
 };
