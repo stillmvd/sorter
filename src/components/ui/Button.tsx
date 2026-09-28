@@ -20,7 +20,7 @@ export function Button({ variant = "secondary", size = 40, hotkey, icon, classNa
   return (
     <button
       type="button"
-      className={`inline-flex shrink-0 items-center justify-center gap-2 rounded-full transition-[background-color,transform] duration-200 ease-trail ${heights[size]} ${look} ${className}`}
+      className={`inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-full transition-[background-color,transform] duration-200 ease-trail ${heights[size]} ${look} ${className}`}
       {...rest}
     >
       {icon}

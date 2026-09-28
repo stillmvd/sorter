@@ -1,11 +1,17 @@
-import type { ReactNode } from "react";
-
-export function Kbd({ children, inverted = false }: { children: ReactNode; inverted?: boolean }) {
-  return inverted ? (
-    <span className="grid h-[22px] place-items-center rounded-full border border-ink px-2 text-[11px] font-bold">
-      {children}
+export function Kbd({ children, inverted = false }: { children: string; inverted?: boolean }) {
+  const cap = inverted
+    ? "border-[color-mix(in_oklab,var(--ink)_35%,transparent)]"
+    : "border-line bg-ground text-fg";
+  return (
+    <span className="inline-flex gap-1">
+      {children.split(" ").map((k) => (
+        <span
+          key={k}
+          className={`inline-grid h-[22px] min-w-[22px] place-items-center whitespace-nowrap rounded-md border border-b-2 px-1.5 text-[11px] font-bold leading-none ${cap}`}
+        >
+          {k}
+        </span>
+      ))}
     </span>
-  ) : (
-    <span className="text-xs font-medium text-dim">{children}</span>
   );
 }
