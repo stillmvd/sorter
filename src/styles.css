@@ -1,0 +1,121 @@
+@import "tailwindcss";
+@import "./tokens.css";
+
+@font-face {
+  font-family: "Kockers Sans";
+  src: url("./fonts/KockersSans-Light.woff2") format("woff2");
+  font-weight: 300;
+  font-display: block;
+}
+@font-face {
+  font-family: "Kockers Sans";
+  src: url("./fonts/KockersSans-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: block;
+}
+@font-face {
+  font-family: "Kockers Sans";
+  src: url("./fonts/KockersSans-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-display: block;
+}
+@font-face {
+  font-family: "Kockers Sans";
+  src: url("./fonts/KockersSans-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-display: block;
+}
+
+@theme inline {
+  --color-ground: var(--ground);
+  --color-cosmic: var(--cosmic);
+  --color-raised: var(--raised);
+  --color-line: var(--line);
+  --color-strong: var(--strong);
+  --color-fg: var(--fg);
+  --color-dim: var(--dim);
+  --color-ink: var(--ink);
+  --color-film: var(--film);
+  --color-hole: var(--hole);
+  --color-danger: var(--danger);
+  --font-sans: "Kockers Sans", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, monospace;
+  --ease-trail: var(--ease);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    background: var(--ground);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-synthesis: none;
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  h1,
+  h2,
+  h3 {
+    margin: 0;
+    line-height: 1.06;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+  }
+
+  button {
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  button:not(:disabled):active {
+    transform: scale(0.96);
+  }
+
+  button:disabled {
+    cursor: default;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--fg);
+    outline-offset: 2px;
+  }
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-track:vertical {
+  margin-block: var(--scroll-inset, 24px);
+}
+*::-webkit-scrollbar-track:horizontal {
+  margin-inline: var(--scroll-inset, 24px);
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--strong);
+  border: 2px solid transparent;
+  border-radius: 99px;
+  background-clip: padding-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
+}

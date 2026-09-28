@@ -1,0 +1,341 @@
+import { openPath } from "@tauri-apps/plugin-opener";
+import { Layers, Plus } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { errorText, ipc, type AppState, type Card, type Method, type Move, type Pile } from "../../lib/ipc";
+import { isTypingChar, keyOf } from "../../lib/keys";
+import { Button } from "../ui/Button";
+import { Heading, PageHeader, Tag } from "../ui/PageHeader";
+import { SearchField } from "../ui/SearchField";
+import { CardStack } from "./Card";
+import { LastMove } from "./LastMove";
+import { PilesRow } from "./PilesRow";
+
+const mb = (b: number) => `${(b / 1024 ** 2).toFixed(1).replace(".", ",")} МБ`;
+const date = (ms: number) => new Date(ms).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+
+function rank(piles: Pile[], query: string) {
+  const q = query.trim().toLowerCase();
+  if (!q) return null;
+  return piles
+    .filter((p) => !p.isTrash && p.name.toLowerCase().includes(q))
+    .sort((a, b) => Number(!a.name.toLowerCase().startsWith(q)) - Number(!b.name.toLowerCase().startsWith(q)));
+}
+
+export function DeckScreen({ initial, onReload }: { initial: AppState; onReload: () => void }) {
+  const [cards, setCards] = useState<Card[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [piles, setPiles] = useState(initial.piles);
+  const [counts, setCounts] = useState(initial.deck);
+  const [last, setLast] = useState<Move | null>(null);
+  const [query, setQuery] = useState("");
+  const [toast, setToast] = useState<string | null>(null);
+  const [paused, setPaused] = useState(false);
+  const [muted, setMuted] = useState(initial.settings.muted !== "0");
+  const [broken, setBroken] = useState<Set<number>>(() => new Set());
+  const [zone, setZone] = useState(420);
+  const pending = useRef(new Set<number>());
+  const search = useRef<HTMLInputElement>(null);
+  const center = useRef<HTMLDivElement>(null);
+  const cardsRef = useRef(cards);
+  cardsRef.current = cards;
+
+  const refill = useCallback(async () => {
+    const fresh = await ipc.deckWindow(0, 30);
+    setCards(fresh.filter((c) => !pending.current.has(c.id)));
+    setLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    void refill();
+  }, [refill]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = window.setTimeout(() => setToast(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [toast]);
+
+  useLayoutEffect(() => {
+    const el = center.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => setZone(Math.max(240, Math.min(entry.contentRect.height, 560))));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const matches = useMemo(() => rank(piles, query), [piles, query]);
+  const hot = matches?.[0]?.id ?? null;
+  const current = cards[0];
+
+  const place = useCallback(
+    async (pile: Pile, method: Method) => {
+      const card = cardsRef.current[0];
+      if (!card) return;
+      pending.current.add(card.id);
+      setCards((cs) => cs.filter((c) => c.id !== card.id));
+      setCounts((c) => ({ ...c, left: c.left - 1, placed: c.placed + 1 }));
+      setQuery("");
+      search.current?.blur();
+      try {
+        const r = await ipc.place([card.id], pile.id, method);
+        setPiles(r.piles);
+        setLast(r.move);
+      } catch (e) {
+        setCards((cs) => [card, ...cs.filter((c) => c.id !== card.id)]);
+        setCounts((c) => ({ ...c, left: c.left + 1, placed: c.placed - 1 }));
+        setToast(errorText(e));
+      } finally {
+        pending.current.delete(card.id);
+      }
+      if (cardsRef.current.length < 12) void refill();
+    },
+    [refill],
+  );
+
+  const newPile = useCallback(async () => {
+    const name = query.trim();
+    if (!name) return;
+    try {
+      const list = await ipc.createPile(name);
+      setPiles(list);
+      const pile = list.find((p) => !p.isTrash && p.name.toLowerCase() === name.toLowerCase());
+      if (pile && cardsRef.current[0]) await place(pile, "new_pile");
+      else setQuery("");
+    } catch (e) {
+      setToast(errorText(e));
+    }
+  }, [query, place]);
+
+  const undo = useCallback(async () => {
+    try {
+      const r = await ipc.undoLast();
+      if (!r.move) {
+        setToast("Забирать нечего — ходов ещё не было.");
+        return;
+      }
+      const back = r.cards;
+      setCards((cs) => [...back, ...cs.filter((c) => !back.some((b) => b.id === c.id))]);
+      setCounts((c) => ({ ...c, left: c.left + back.length, placed: c.placed - back.length }));
+      setPiles(r.piles);
+      setLast(null);
+    } catch (e) {
+      setToast(errorText(e));
+    }
+  }, []);
+
+  const defer = useCallback(async () => {
+    const card = cardsRef.current[0];
+    if (!card || cardsRef.current.length < 2) return;
+    setCards((cs) => [...cs.slice(1), card]);
+    try {
+      await ipc.defer(card.id);
+    } catch (e) {
+      setToast(errorText(e));
+    }
+  }, []);
+
+  const handler = useRef<(e: KeyboardEvent) => void>(() => undefined);
+  handler.current = (e: KeyboardEvent) => {
+    const active = document.activeElement;
+    const inSearch = active === search.current;
+    if (e.ctrlKey && e.code === "KeyZ") {
+      e.preventDefault();
+      void undo();
+      return;
+    }
+    if (e.ctrlKey && e.code === "KeyO") {
+      e.preventDefault();
+      if (current) void openPath(current.path);
+      return;
+    }
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    if (inSearch) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (e.shiftKey) void newPile();
+        else if (matches?.[0]) void place(matches[0], "search");
+      } else if (e.key === "Escape") {
+        setQuery("");
+        search.current?.blur();
+      }
+      return;
+    }
+    const onControl = active && active !== document.body && active.tagName !== "DIV";
+    if (onControl && (e.key === "Enter" || e.key === " " || e.key === "Tab")) return;
+    if (e.key === " ") {
+      e.preventDefault();
+      setPaused((p) => !p);
+      return;
+    }
+    if (e.key === "Tab") {
+      e.preventDefault();
+      void defer();
+      return;
+    }
+    if (e.key === "Escape") {
+      setQuery("");
+      return;
+    }
+    if (e.key === "/") {
+      e.preventDefault();
+      search.current?.focus();
+      return;
+    }
+    const k = keyOf(e);
+    const pile = k ? piles.find((p) => p.key === k) : undefined;
+    if (pile) {
+      e.preventDefault();
+      void place(pile, "key");
+      return;
+    }
+    if (k === "M") {
+      e.preventDefault();
+      setMuted((m) => {
+        void ipc.setSetting("muted", m ? "0" : "1");
+        return !m;
+      });
+      return;
+    }
+    if (isTypingChar(e)) {
+      e.preventDefault();
+      setQuery(e.key);
+      search.current?.focus();
+    }
+  };
+
+  useEffect(() => {
+    const listen = (e: KeyboardEvent) => handler.current(e);
+    window.addEventListener("keydown", listen);
+    return () => window.removeEventListener("keydown", listen);
+  }, []);
+
+  const number = counts.placed + 1;
+  const empty = loaded && !current;
+
+  return (
+    <main
+      className="relative mx-2 mb-2 flex min-h-0 flex-1 flex-col gap-[18px] rounded-[28px] bg-cosmic px-10 py-7"
+      onPointerUp={(e) => {
+        const button = (e.target as HTMLElement).closest("button");
+        if (button) window.setTimeout(() => button.blur(), 0);
+      }}
+    >
+      <PageHeader
+        tag={
+          <Tag icon={<Layers strokeWidth={1.5} />}>
+            Разложено {counts.placed} из {counts.placed + counts.left}
+          </Tag>
+        }
+        light="В колоде"
+        bold={String(Math.max(counts.left, 0))}
+      />
+
+      {empty ? (
+        <div className="flex min-h-0 flex-1 flex-col items-start justify-center gap-4">
+          <Heading light="Колода" bold="пуста" size={56} />
+          <p className="m-0 max-w-[60ch] text-[15px] leading-[1.55] text-dim">
+            Все видео лежат по стопкам. Новые видео из папки колоды появятся здесь при следующем запуске.
+          </p>
+          <Button onClick={onReload}>Проверить папку ещё раз</Button>
+        </div>
+      ) : (
+        <div ref={center} className="flex min-h-0 flex-1 items-stretch gap-12">
+          <LastMove move={last} onUndo={undo} />
+          {current && (
+            <CardStack
+              cards={cards}
+              number={number}
+              zone={zone}
+              muted={muted}
+              paused={paused}
+              broken={broken}
+              onBroken={(id) => setBroken((b) => new Set(b).add(id))}
+              onDragStart={(e) => {
+                e.dataTransfer.setData("text/plain", String(current.id));
+                e.dataTransfer.effectAllowed = "move";
+              }}
+            />
+          )}
+          {current && (
+            <div className="flex min-w-0 flex-1 flex-col justify-center gap-3.5">
+              <div className="flex flex-col gap-1">
+                <div className="truncate text-lg font-bold">{current.fileName}</div>
+                <div className="text-[13px] font-medium text-dim">
+                  {[
+                    current.takenAt ? date(current.takenAt) : null,
+                    mb(current.size),
+                    current.width && current.height ? `${current.width}×${current.height}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <Button onClick={defer} hotkey="Tab" disabled={cards.length < 2}>
+                  В конец колоды
+                </Button>
+                {broken.has(current.id) && (
+                  <Button onClick={() => openPath(current.path)} hotkey="Ctrl O">
+                    Открыть в плеере
+                  </Button>
+                )}
+              </div>
+              <p className="m-0 text-[13px] leading-normal text-dim">
+                Клавиша стопки — положить сразу · начни печатать — найдёшь стопку · Пробел — пауза · M — звук{muted ? "" : " (включён)"}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="flex items-center gap-3">
+        <div className="text-[13px] font-medium text-dim">Стопки · {piles.filter((p) => !p.isTrash).length}</div>
+        <SearchField
+          ref={search}
+          size={36}
+          hotkey="/"
+          active={!!query}
+          className="w-[300px]"
+          placeholder="Печатай — стопки отфильтруются"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        {query && (
+          <span className="truncate text-[13px] text-dim">
+            {matches?.length ? `Enter — в «${matches[0].name}» · ` : "Такой стопки нет · "}Shift Enter — новая стопка «{query.trim()}»
+          </span>
+        )}
+        <div className="flex-1" />
+        <Button
+          size={36}
+          icon={<Plus className="h-3.5 w-3.5" strokeWidth={1.5} />}
+          onClick={() => {
+            search.current?.focus();
+            setToast("Напечатай название и нажми Shift Enter — стопка появится, а карта ляжет в неё.");
+          }}
+        >
+          Новая стопка
+        </Button>
+      </div>
+      {piles.filter((p) => !p.isTrash).length === 0 && (
+        <p className="m-0 -mb-2 text-[13px] text-dim">Стопок пока нет. Напечатай название и нажми Shift Enter — создашь первую.</p>
+      )}
+      <PilesRow
+        piles={piles}
+        hot={hot}
+        dim={matches ? new Set(matches.map((m) => m.id)) : null}
+        onPick={(p) => place(p, "key")}
+        onDrop={(p) => place(p, "drag")}
+      />
+
+      {toast && (
+        <div
+          role="status"
+          className="absolute bottom-32 left-1/2 max-w-[640px] -translate-x-1/2 rounded-full bg-fg px-5 py-3 text-sm font-medium text-ink shadow-[0_20px_50px_rgb(0_0_0/40%)]"
+        >
+          {toast}
+        </div>
+      )}
+    </main>
+  );
+}
