@@ -124,7 +124,7 @@ export function CardStack({
   paused,
   broken,
   onBroken,
-  onDragStart,
+  onPress,
   onTogglePause,
   volume,
 }: {
@@ -137,7 +137,7 @@ export function CardStack({
   paused: boolean;
   broken: Set<number>;
   onBroken: (id: number) => void;
-  onDragStart: (e: React.DragEvent) => void;
+  onPress: (e: React.PointerEvent) => void;
 }) {
   const [measured, setMeasured] = useState<Record<number, number>>({});
   const top = useRef<HTMLDivElement>(null);
@@ -175,8 +175,7 @@ export function CardStack({
           key={card.id}
           ref={i === 0 ? top : undefined}
           data-card-top={i === 0 ? "" : undefined}
-          draggable={i === 0}
-          onDragStart={onDragStart}
+          onPointerDown={i === 0 ? onPress : undefined}
           aria-hidden={i !== 0}
           className={`absolute overflow-hidden rounded-[28px] border border-line bg-film shadow-[0_24px_60px_rgb(0_0_0/35%)] transition-[width,height] duration-[320ms] ease-trail ${
             i === 0 ? "z-10 cursor-grab active:cursor-grabbing" : "pointer-events-none opacity-0"

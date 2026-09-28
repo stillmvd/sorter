@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent } from "react";
 import type { Card } from "../../lib/ipc";
 import { Tile } from "./Tile";
 
@@ -49,14 +49,14 @@ export function ContactSheet({
   selected,
   cacheDir,
   onSelect,
-  onDragStart,
+  onPress,
   onVisible,
 }: {
   cards: Card[];
   selected: Set<number>;
   cacheDir: string;
   onSelect: (next: Set<number>) => void;
-  onDragStart: (e: DragEvent, card: Card) => void;
+  onPress: (e: PointerEvent, card: Card) => void;
   onVisible: (count: number) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -138,7 +138,7 @@ export function ContactSheet({
               cacheDir={cacheDir}
               selected={selected.has(p.card.id)}
               onPick={pick}
-              onDragStart={onDragStart}
+              onPress={onPress}
             />
           ))}
         </div>

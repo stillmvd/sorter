@@ -1,5 +1,4 @@
 import { Trash2 } from "lucide-react";
-import { useState } from "react";
 import type { Pile } from "../../lib/ipc";
 
 function stack(count: number) {
@@ -15,7 +14,7 @@ export function PilesRow({
   hot,
   dim,
   onPick,
-  onDrop,
+  dragOver,
   onMenu,
 }: {
   onMenu: (pile: Pile, x: number, y: number) => void;
@@ -23,13 +22,12 @@ export function PilesRow({
   hot: number | null;
   dim: Set<number> | null;
   onPick: (pile: Pile) => void;
-  onDrop: (pile: Pile) => void;
+  dragOver: number | null;
 }) {
-  const [over, setOver] = useState<number | null>(null);
   return (
     <div className="grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] items-end gap-2.5 pt-3">
       {piles.map((p) => {
-        const lit = p.id === hot || p.id === over;
+        const lit = p.id === hot || p.id === dragOver;
         return (
           <button
             key={p.id}
@@ -40,17 +38,6 @@ export function PilesRow({
             onContextMenu={(e) => {
               e.preventDefault();
               if (!p.isTrash) onMenu(p, e.clientX, e.clientY);
-            }}
-            onDragOver={(e) => {
-              e.preventDefault();
-              e.dataTransfer.dropEffect = "move";
-              setOver(p.id);
-            }}
-            onDragLeave={() => setOver((o) => (o === p.id ? null : o))}
-            onDrop={(e) => {
-              e.preventDefault();
-              setOver(null);
-              onDrop(p);
             }}
             className={`flex h-[84px] flex-col justify-between rounded-2xl px-3 py-2.5 text-left transition-[transform,background-color,opacity] duration-200 ease-trail ${
               lit ? "-translate-y-2 bg-fg text-ink outline-[1.5px] outline-offset-4 outline-fg outline-dashed" : p.isTrash ? "border-[1.5px] border-dashed border-line bg-transparent" : "bg-raised"

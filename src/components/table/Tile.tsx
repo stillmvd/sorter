@@ -1,4 +1,4 @@
-import { memo, useRef, useState, type DragEvent, type MouseEvent } from "react";
+import { memo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { frameSrc, media, type Card } from "../../lib/ipc";
 import { FRAMES } from "../deck/FilmStrip";
 
@@ -14,7 +14,7 @@ export const Tile = memo(function Tile({
   cacheDir,
   selected,
   onPick,
-  onDragStart,
+  onPress,
 }: {
   card: Card;
   no: number;
@@ -23,7 +23,7 @@ export const Tile = memo(function Tile({
   cacheDir: string;
   selected: boolean;
   onPick: (e: MouseEvent, card: Card) => void;
-  onDragStart: (e: DragEvent, card: Card) => void;
+  onPress: (e: PointerEvent, card: Card) => void;
 }) {
   const [pct, setPct] = useState<number | null>(null);
   const [live, setLive] = useState(false);
@@ -38,6 +38,7 @@ export const Tile = memo(function Tile({
   };
 
   const move = (e: MouseEvent<HTMLButtonElement>) => {
+    if ("dragging" in document.body.dataset) return;
     const r = e.currentTarget.getBoundingClientRect();
     const p = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
     want.current = p;
@@ -52,7 +53,7 @@ export const Tile = memo(function Tile({
   return (
     <button
       type="button"
-      draggable
+      data-tile-id={card.id}
       aria-pressed={selected}
       aria-label={card.fileName}
       title={card.fileName}
@@ -62,7 +63,7 @@ export const Tile = memo(function Tile({
         setPct(null);
         setLive(false);
       }}
-      onDragStart={(e) => onDragStart(e, card)}
+      onPointerDown={(e) => onPress(e, card)}
       className={`relative shrink-0 select-none overflow-hidden rounded-xl bg-[#26262a] ${
         selected ? "outline outline-[1.5px] outline-offset-[3px] outline-[#ececef]" : ""
       }`}

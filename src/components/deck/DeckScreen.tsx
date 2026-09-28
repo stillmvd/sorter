@@ -1,10 +1,11 @@
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { FolderOpen, LayoutGrid, Layers, Plus } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { errorText, ipc, onCard, onDeckChanged, onPilesChanged, onProgress, type AppState, type Card, type Method, type Move, type Pile } from "../../lib/ipc";
 import { isTypingChar, keyOf } from "../../lib/keys";
 import { cardsWord } from "../../lib/plural";
 import { play } from "../../lib/sound";
+import { pressToDrag } from "../fx/Drag";
 import { Flights, motionOff, pileElement, shake, snapshot, type Flight } from "../fx/Flight";
 import { FilmStrip, seekFrame } from "./FilmStrip";
 import { KeyLegend } from "./KeyLegend";
@@ -234,11 +235,52 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
     void ipc.setSetting("mode", next);
   }, []);
 
-  const dragStrip = useCallback((e: DragEvent, card: Card) => {
-    if (!selectedRef.current.has(card.id)) setSelected(new Set([card.id]));
-    e.dataTransfer.setData("text/plain", "table");
-    e.dataTransfer.effectAllowed = "move";
+  const pilesRef = useRef(piles);
+  pilesRef.current = piles;
+  const [dragPile, setDragPile] = useState<number | null>(null);
+  const dropTo = useRef<(pile: Pile) => void>(() => undefined);
+  dropTo.current = (pile: Pile) => void put(pile, "drag");
+  const dropHandlers = {
+    onOver: setDragPile,
+    onDrop: (id: number) => {
+      const pile = pilesRef.current.find((p) => p.id === id);
+      if (pile) dropTo.current(pile);
+    },
+  };
+
+  const pressTile = useCallback((e: PointerEvent, card: Card) => {
+    pressToDrag(e, {
+      ...dropHandlers,
+      prepare: () => {
+        let ids = [...selectedRef.current];
+        if (!selectedRef.current.has(card.id)) {
+          ids = [card.id];
+          selectedRef.current = new Set(ids);
+          setSelected(selectedRef.current);
+        }
+        const tile = (id: number) => document.querySelector<HTMLElement>(`[data-tile-id="${id}"]`);
+        const grabbed = tile(card.id);
+        if (!grabbed) return null;
+        const pieces = ids
+          .map(tile)
+          .filter((el): el is HTMLElement => !!el)
+          .map((el) => ({ el, image: el.querySelector("img")?.src ?? null }));
+        return { pieces, grabbed, count: ids.length, radius: 12 };
+      },
+    });
   }, []);
+
+  const pressCard = (e: PointerEvent) => {
+    pressToDrag(e, {
+      ...dropHandlers,
+      prepare: () => {
+        const snap = snapshot();
+        const grabbed = document.querySelector<HTMLElement>("[data-card-top]");
+        if (!grabbed) return null;
+        return { pieces: [{ el: grabbed, image: snap?.image ?? null }], grabbed, count: 1, radius: 28 };
+      },
+    });
+  };
 
   const newPile = useCallback(async () => {
     const name = query.trim();
@@ -458,7 +500,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
           selected={selected}
           cacheDir={initial.cacheDir}
           onSelect={setSelected}
-          onDragStart={dragStrip}
+          onPress={pressTile}
           onVisible={setOnScreen}
         />
       ) : (
@@ -475,10 +517,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
               onBroken={(id) => setBroken((b) => new Set(b).add(id))}
               onTogglePause={() => setPaused((p) => !p)}
               volume={volume}
-              onDragStart={(e) => {
-                e.dataTransfer.setData("text/plain", String(current.id));
-                e.dataTransfer.effectAllowed = "move";
-              }}
+              onPress={pressCard}
             />
           )}
           {current && (
@@ -578,7 +617,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
         hot={hot}
         dim={matches ? new Set(matches.map((m) => m.id)) : null}
         onPick={(p) => put(p, "key")}
-        onDrop={(p) => put(p, "drag")}
+        dragOver={dragPile}
         onMenu={(pile, x, y) => setMenu({ pile, x, y })}
       />
 
