@@ -384,7 +384,8 @@ fn return_cards(conn: &Connection, move_id: i64, items: &[Item]) -> AppResult<()
     )?;
     for (i, it) in items.iter().enumerate() {
         conn.execute(
-            "UPDATE card SET status = 'in_deck', pile_id = NULL, current_path = NULL, position = ?2 WHERE id = ?1",
+            "UPDATE card SET status = 'in_deck', pile_id = NULL, current_path = NULL, position = ?2,
+             stage = CASE WHEN stage = 'meta' THEN 'new' ELSE stage END WHERE id = ?1",
             params![it.card_id, top - (items.len() - i) as f64],
         )?;
         conn.execute("DELETE FROM example WHERE card_id = ?1", params![it.card_id])?;

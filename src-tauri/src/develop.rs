@@ -329,11 +329,54 @@ pub fn read_frames(path: &Path) -> Option<Vec<image::RgbImage>> {
     None
 }
 
+const KEEP_PLACED_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+
+pub fn tidy(conn: &Connection, cache: &Path, now: i64) -> rusqlite::Result<(usize, usize)> {
+    let stale: Vec<i64> = conn
+        .prepare(
+            "SELECT c.id FROM card c WHERE c.stage IN ('frames','embedded') AND (c.status = 'gone' OR (c.status = 'placed' AND
+               COALESCE((SELECT MAX(m.at) FROM move m JOIN move_item i ON i.move_id = m.id WHERE i.card_id = c.id AND m.state = 'done'), 0) < ?1))",
+        )?
+        .query_map(params![now - KEEP_PLACED_MS], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    for id in &stale {
+        conn.execute("DELETE FROM embedding WHERE card_id = ?1", params![id])?;
+        conn.execute("UPDATE card SET stage = 'meta', frames = 0 WHERE id = ?1", params![id])?;
+    }
+    let keep: std::collections::HashSet<String> = conn
+        .prepare("SELECT id FROM card WHERE stage IN ('frames','embedded')")?
+        .query_map([], |r| r.get::<_, i64>(0))?
+        .map(|id| id.map(|id| id.to_string()))
+        .collect::<Result<_, _>>()?;
+    let mut dirs = 0;
+    if let Ok(entries) = fs::read_dir(cache) {
+        for dir in entries.filter_map(|e| e.ok()) {
+            if !keep.contains(dir.file_name().to_string_lossy().as_ref()) && fs::remove_dir_all(dir.path()).is_ok() {
+                dirs += 1;
+            }
+        }
+    }
+    let missing: Vec<i64> = conn
+        .prepare("SELECT id, path FROM example")?
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+        .filter_map(|r| r.ok())
+        .filter(|(_, p)| !Path::new(p).exists())
+        .map(|(id, _)| id)
+        .collect();
+    for id in &missing {
+        conn.execute("DELETE FROM example WHERE id = ?1", params![id])?;
+    }
+    Ok((dirs, missing.len()))
+}
+
 pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<AtomicBool>, wake: Arc<AtomicBool>) {
     std::thread::spawn(move || {
         #[cfg(windows)]
         mf::start();
         let Ok(conn) = db::open(&db_path) else { return };
+        if let Err(e) = tidy(&conn, &cache, db::now_ms()) {
+            eprintln!("tidy: {e}");
+        }
         let mut last_emit = Instant::now() - Duration::from_secs(1);
         let mut was_busy = false;
         let mut learner = Learner::new();
@@ -390,6 +433,38 @@ mod tests {
         assert!(meta.duration_ms > 0);
         assert_eq!(meta.frames.len(), FRAMES as usize);
         assert!(meta.width > 0 && meta.height > 0);
+    }
+
+    #[test]
+    fn tidy_drops_old_frames_and_missing_examples() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("cache");
+        let conn = Connection::open_in_memory().unwrap();
+        db::init(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO pile(id, table_path, name, ord) VALUES (1, 'T', 'A', 0);
+             INSERT INTO card(id, deck_path, file_name, size, mtime, position, stage, frames, status) VALUES
+               (1, 'D', 'deck.mp4', 1, 0, 1, 'embedded', 8, 'in_deck'),
+               (2, 'D', 'old.mp4', 1, 0, 2, 'embedded', 8, 'placed'),
+               (3, 'D', 'fresh.mp4', 1, 0, 3, 'embedded', 8, 'placed'),
+               (4, 'D', 'gone.mp4', 1, 0, 4, 'frames', 8, 'gone');
+             INSERT INTO move(id, at, method, pile_id, state) VALUES (1, 1000, 'key', 1, 'done'), (2, 900000000000, 'key', 1, 'done');
+             INSERT INTO move_item(move_id, card_id, from_path, step) VALUES (1, 2, 'x', 'done'), (2, 3, 'y', 'done');
+             INSERT INTO embedding(card_id, vector) VALUES (1, x'00'), (2, x'00'), (3, x'00');",
+        )
+        .unwrap();
+        let kept = dir.path().join("kept.mp4");
+        fs::write(&kept, b"x").unwrap();
+        conn.execute("INSERT INTO example(pile_id, path, vector) VALUES (1, ?1, x'00'), (1, 'Z:/nope.mp4', x'00')", params![kept.to_string_lossy()]).unwrap();
+        for id in ["1", "2", "3", "4", "99"] {
+            fs::create_dir_all(cache.join(id)).unwrap();
+        }
+        let (dirs, examples) = tidy(&conn, &cache, 900000000000 + 1000).unwrap();
+        assert_eq!((dirs, examples), (3, 1));
+        assert!(cache.join("1").exists() && cache.join("3").exists());
+        let stage = |id: i64| conn.query_row("SELECT stage FROM card WHERE id = ?1", params![id], |r| r.get::<_, String>(0)).unwrap();
+        assert_eq!((stage(1).as_str(), stage(2).as_str(), stage(3).as_str(), stage(4).as_str()), ("embedded", "meta", "embedded", "meta"));
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM embedding", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
     }
 
     #[test]
