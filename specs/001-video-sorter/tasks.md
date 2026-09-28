@@ -90,9 +90,9 @@ Tauri-проект в корне `Sorter/`: фронт `src/`, Rust `src-tauri/s
 
 **Independent Test**: quickstart 9, 10.
 
-- [ ] T035 [P] [US3] `src/components/table/ContactSheet.tsx` + `StripRow.tsx` по холсту «Стол»: 2 колонки плёнок по 6 кадров h44, подпись номера/имени/длины моно 10, отметка — галочка «карандашом» + обводка 1,5, наведение — `<video>` поверх плёнки без звука; виртуализация списка (колода до 5 000)
-- [ ] T036 [US3] `src/components/table/TableScreen.tsx`: клик/Shift+клик/Ctrl+A/Esc по contracts/keyboard.md, строка «Отмечено N» + поиск (остальные стопки opacity .3), клавиша стопки/Delete/Enter/Shift+Enter → `place(card_ids, …, method: table|new_pile)` одним ходом; перетаскивание пачки на стопку
-- [ ] T037 [US3] Переключение Колода/Стол (сегмент, Ctrl+1/Ctrl+2), режим в настройках; `LastMove` для пачки — «N карт → стопка»
+- [X] T035 [P] [US3] `src/components/table/ContactSheet.tsx` + `StripRow.tsx` по холсту «Стол»: 2 колонки плёнок по 6 кадров h44, подпись номера/имени/длины моно 10, отметка — галочка «карандашом» + обводка 1,5, наведение — `<video>` поверх плёнки без звука; виртуализация списка (колода до 5 000)
+- [X] T036 [US3] `src/components/table/TableScreen.tsx`: клик/Shift+клик/Ctrl+A/Esc по contracts/keyboard.md, строка «Отмечено N» + поиск (остальные стопки opacity .3), клавиша стопки/Delete/Enter/Shift+Enter → `place(card_ids, …, method: table|new_pile)` одним ходом; перетаскивание пачки на стопку
+- [X] T037 [US3] Переключение Колода/Стол (сегмент, Ctrl+1/Ctrl+2), режим в настройках; `LastMove` для пачки — «N карт → стопка»
 
 ---
 

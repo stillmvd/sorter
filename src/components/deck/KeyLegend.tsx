@@ -18,6 +18,7 @@ const ROWS: { keys: string[]; label: string }[] = [
   { keys: ["M"], label: "звук" },
   { keys: ["↑", "↓"], label: "громкость видео" },
   { keys: ["/"], label: "искать стопку" },
+  { keys: ["Ctrl", "2"], label: "стол — разложить пачкой" },
 ];
 
 export function KeyLegend({ muted }: { muted: boolean }) {

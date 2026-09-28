@@ -1,5 +1,6 @@
 import { Trash2, Undo2 } from "lucide-react";
 import { media, type Move } from "../../lib/ipc";
+import { cardsWord } from "../../lib/plural";
 import { Button } from "../ui/Button";
 
 function Thumb({ move }: { move: Move }) {
@@ -21,6 +22,22 @@ function Thumb({ move }: { move: Move }) {
   );
 }
 
+export function LastMoveLine({ move, onUndo }: { move: Move | null; onUndo: () => void }) {
+  if (!move) return null;
+  const first = move.items[0];
+  return (
+    <div className="flex min-w-0 items-center gap-3">
+      <span className="truncate text-[13px] text-dim">
+        Последний ход: <span className="font-bold text-fg">{move.items.length > 1 ? cardsWord(move.items.length) : first?.fileName}</span> →{" "}
+        {move.pileName}
+      </span>
+      <Button size={36} onClick={onUndo} hotkey="Ctrl Z" icon={<Undo2 className="h-3.5 w-3.5" strokeWidth={1.5} />}>
+        Забрать
+      </Button>
+    </div>
+  );
+}
+
 export function LastMove({ move, onUndo }: { move: Move | null; onUndo: () => void }) {
   const first = move?.items[0];
   const renamed = first?.finalName && first.finalName !== first.fileName;
@@ -32,7 +49,7 @@ export function LastMove({ move, onUndo }: { move: Move | null; onUndo: () => vo
           <Thumb move={move} />
           <div className="flex min-w-0 flex-col gap-1">
             <div className="truncate text-[13px] font-bold">
-              {move.items.length > 1 ? `${move.items.length} карт` : first.fileName}
+              {move.items.length > 1 ? cardsWord(move.items.length) : first.fileName}
             </div>
             <div className="truncate text-[13px] text-dim">→ {move.pileName}</div>
             {renamed && <div className="truncate text-xs text-dim">как «{first.finalName}»</div>}

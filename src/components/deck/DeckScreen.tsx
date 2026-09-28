@@ -1,8 +1,9 @@
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { FolderOpen, Layers, Plus } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { FolderOpen, LayoutGrid, Layers, Plus } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { errorText, ipc, onCard, onDeckChanged, onPilesChanged, onProgress, type AppState, type Card, type Method, type Move, type Pile } from "../../lib/ipc";
 import { isTypingChar, keyOf } from "../../lib/keys";
+import { cardsWord } from "../../lib/plural";
 import { play } from "../../lib/sound";
 import { Flights, motionOff, pileElement, shake, snapshot, type Flight } from "../fx/Flight";
 import { FilmStrip, seekFrame } from "./FilmStrip";
@@ -13,11 +14,20 @@ import { Button } from "../ui/Button";
 import { Heading, PageHeader, Tag } from "../ui/PageHeader";
 import { SearchField } from "../ui/SearchField";
 import { CardStack } from "./Card";
-import { LastMove } from "./LastMove";
+import { LastMove, LastMoveLine } from "./LastMove";
+import { ContactSheet } from "../table/ContactSheet";
+import { Segment } from "../ui/Segment";
 import { PilesRow } from "./PilesRow";
 
 const mb = (b: number) => `${(b / 1024 ** 2).toFixed(1).replace(".", ",")} МБ`;
 const date = (ms: number) => new Date(ms).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+
+type Mode = "deck" | "table";
+
+const MODES: { value: Mode; label: string; hint: string }[] = [
+  { value: "deck", label: "Колода", hint: "По одной карте — Ctrl 1" },
+  { value: "table", label: "Стол", hint: "Пачкой — Ctrl 2" },
+];
 
 function rank(piles: Pile[], query: string) {
   const q = query.trim().toLowerCase();
@@ -44,6 +54,11 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
   const [zone, setZone] = useState(420);
   const [flights, setFlights] = useState<Flight[]>([]);
   const [developing, setDeveloping] = useState(initial.developing);
+  const [mode, setMode] = useState<Mode>(initial.settings.mode === "table" ? "table" : "deck");
+  const [sheet, setSheet] = useState<Card[]>([]);
+  const [sheetLoaded, setSheetLoaded] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(() => new Set());
+  const [onScreen, setOnScreen] = useState(0);
   const flightSeq = useRef(0);
   const landed = useCallback((f: Flight) => {
     setFlights((list) => list.filter((x) => x.id !== f.id));
@@ -54,6 +69,10 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
   const center = useRef<HTMLDivElement>(null);
   const cardsRef = useRef(cards);
   cardsRef.current = cards;
+  const sheetRef = useRef(sheet);
+  sheetRef.current = sheet;
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
 
   const refill = useCallback(async () => {
     const fresh = await ipc.deckWindow(0, 30);
@@ -61,20 +80,37 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
     setLoaded(true);
   }, []);
 
+  const loadSheet = useCallback(async () => {
+    const all = await ipc.deckWindow(0, 100000);
+    const fresh = all.filter((c) => !pending.current.has(c.id));
+    setSheet(fresh);
+    setSelected((sel) => new Set(fresh.filter((c) => sel.has(c.id)).map((c) => c.id)));
+    setSheetLoaded(true);
+  }, []);
+
   useEffect(() => {
-    void refill();
+    if (mode === "table") void loadSheet();
+    else void refill();
+  }, [mode, refill, loadSheet]);
+
+  useEffect(() => {
     void ipc.getState().then((st) => {
       setCounts(st.deck);
       setPiles(st.piles);
     });
     void ipc.journal(null, 20).then((recent) => setLast(recent.find((m) => m.state === "done") ?? null));
-  }, [refill]);
+  }, []);
 
   useEffect(() => {
-    const offCard = onCard((card) => setCards((cs) => cs.map((c) => (c.id === card.id ? { ...c, ...card } : c))));
+    const offCard = onCard((card) => {
+      setCards((cs) => cs.map((c) => (c.id === card.id ? { ...c, ...card } : c)));
+      setSheet((cs) => cs.map((c) => (c.id === card.id ? { ...c, ...card } : c)));
+    });
     const offProgress = onProgress(setDeveloping);
     const offDeck = onDeckChanged(({ added, gone }) => {
       setCards((cs) => [...cs.filter((c) => !gone.includes(c.id)), ...added.filter((a) => !cs.some((c) => c.id === a.id))]);
+      setSheet((cs) => [...cs.filter((c) => !gone.includes(c.id)), ...added.filter((a) => !cs.some((c) => c.id === a.id))]);
+      setSelected((sel) => (gone.some((id) => sel.has(id)) ? new Set([...sel].filter((id) => !gone.includes(id))) : sel));
       void ipc.getState().then((st) => setCounts(st.deck));
     });
     const offPiles = onPilesChanged(setPiles);
@@ -141,6 +177,66 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
     [refill],
   );
 
+  const placeBatch = useCallback(
+    async (pile: Pile, method: Method) => {
+      const batch = sheetRef.current.filter((c) => selectedRef.current.has(c.id));
+      if (!batch.length) {
+        setToast("Сначала отметь плёнки: клик — одна, Shift клик — диапазон, Ctrl A — все на экране.");
+        return;
+      }
+      const ids = batch.map((c) => c.id);
+      play(pile.isTrash ? "trash" : method === "new_pile" ? "new_pile" : batch.length > 1 ? "batch" : "place");
+      shake(pile.id);
+      ids.forEach((id) => pending.current.add(id));
+      setSheet((cs) => cs.filter((c) => !ids.includes(c.id)));
+      setCards((cs) => cs.filter((c) => !ids.includes(c.id)));
+      setSelected(new Set());
+      setCounts((c) => ({ ...c, left: c.left - ids.length, placed: c.placed + ids.length }));
+      setQuery("");
+      search.current?.blur();
+      let failed = false;
+      try {
+        const r = await ipc.place(ids, pile.id, method);
+        setPiles(r.piles);
+        setLast(r.move);
+        if (sheetRef.current.length === 0) play("empty");
+      } catch (e) {
+        failed = true;
+        play("error");
+        setCounts((c) => ({ ...c, left: c.left + ids.length, placed: c.placed - ids.length }));
+        setToast(errorText(e));
+      } finally {
+        ids.forEach((id) => pending.current.delete(id));
+      }
+      if (failed) {
+        await loadSheet();
+        setSelected(new Set(ids));
+      }
+    },
+    [loadSheet],
+  );
+
+  const put = useCallback(
+    (pile: Pile, method: Method) => {
+      if (mode === "deck") return place(pile, method);
+      return placeBatch(pile, method === "key" || method === "search" ? "table" : method);
+    },
+    [mode, place, placeBatch],
+  );
+
+  const switchMode = useCallback((next: Mode) => {
+    setMode(next);
+    setQuery("");
+    setPaused(false);
+    void ipc.setSetting("mode", next);
+  }, []);
+
+  const dragStrip = useCallback((e: DragEvent, card: Card) => {
+    if (!selectedRef.current.has(card.id)) setSelected(new Set([card.id]));
+    e.dataTransfer.setData("text/plain", "table");
+    e.dataTransfer.effectAllowed = "move";
+  }, []);
+
   const newPile = useCallback(async () => {
     const name = query.trim();
     if (!name) return;
@@ -148,12 +244,13 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
       const list = await ipc.createPile(name);
       setPiles(list);
       const pile = list.find((p) => !p.isTrash && p.name.toLowerCase() === name.toLowerCase());
-      if (pile && cardsRef.current[0]) await place(pile, "new_pile");
+      const target = mode === "deck" ? cardsRef.current.length > 0 : selectedRef.current.size > 0;
+      if (pile && target) await put(pile, "new_pile");
       else setQuery("");
     } catch (e) {
       setToast(errorText(e));
     }
-  }, [query, place]);
+  }, [query, mode, put]);
 
   const undo = useCallback(async () => {
     try {
@@ -167,13 +264,17 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
       setCards((cs) => [...back, ...cs.filter((c) => !back.some((b) => b.id === c.id))]);
       setCounts((c) => ({ ...c, left: c.left + back.length, placed: c.placed - back.length }));
       setPiles(r.piles);
+      if (mode === "table") {
+        await loadSheet();
+        setSelected(new Set(back.map((c) => c.id)));
+      }
       const recent = await ipc.journal(null, 20);
       setLast(recent.find((m) => m.state === "done") ?? null);
     } catch (e) {
       play("error");
       setToast(errorText(e));
     }
-  }, []);
+  }, [mode, loadSheet]);
 
   const defer = useCallback(async () => {
     const card = cardsRef.current[0];
@@ -221,6 +322,12 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
     if (menu) return;
     const active = document.activeElement;
     const inSearch = active === search.current;
+    const focus = mode === "deck" ? current : sheet.find((c) => selected.has(c.id));
+    if (e.ctrlKey && (e.code === "Digit1" || e.code === "Digit2")) {
+      e.preventDefault();
+      switchMode(e.code === "Digit1" ? "deck" : "table");
+      return;
+    }
     if (e.ctrlKey && e.code === "KeyZ") {
       e.preventDefault();
       void undo();
@@ -228,12 +335,12 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
     }
     if (e.ctrlKey && e.code === "KeyE") {
       e.preventDefault();
-      if (current) void revealItemInDir(current.path);
+      if (focus) void revealItemInDir(focus.path);
       return;
     }
     if (e.ctrlKey && e.code === "KeyO") {
       e.preventDefault();
-      if (current) void openPath(current.path);
+      if (focus) void openPath(focus.path);
       return;
     }
     if (e.ctrlKey || e.altKey || e.metaKey) return;
@@ -241,8 +348,9 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
       if (e.key === "Enter") {
         e.preventDefault();
         if (e.shiftKey) void newPile();
-        else if (matches?.[0]) void place(matches[0], "search");
+        else if (matches?.[0]) void put(matches[0], "search");
       } else if (e.key === "Escape") {
+        if (!query && mode === "table") setSelected(new Set());
         setQuery("");
         search.current?.blur();
       }
@@ -250,6 +358,12 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
     }
     const onControl = active && active !== document.body && active.tagName !== "DIV";
     if (onControl && (e.key === "Enter" || e.key === " " || e.key === "Tab")) return;
+    if (e.key === "Escape") {
+      if (query) setQuery("");
+      else if (mode === "table") setSelected(new Set());
+      return;
+    }
+    if (mode === "table" && (e.key === " " || e.key === "Tab" || e.key.startsWith("Arrow"))) return;
     if (e.key === " ") {
       e.preventDefault();
       setPaused((p) => !p);
@@ -258,10 +372,6 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
     if (e.key === "Tab") {
       e.preventDefault();
       void defer();
-      return;
-    }
-    if (e.key === "Escape") {
-      setQuery("");
       return;
     }
     if (e.key === "ArrowUp" || e.key === "ArrowDown") {
@@ -283,7 +393,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
     const pile = k ? piles.find((p) => p.key === k) : undefined;
     if (pile) {
       e.preventDefault();
-      void place(pile, "key");
+      void put(pile, "key");
       return;
     }
     if (k === "M") {
@@ -305,7 +415,8 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
   }, []);
 
   const number = counts.placed + 1;
-  const empty = loaded && !current;
+  const empty = mode === "deck" ? loaded && !current : sheetLoaded && sheet.length === 0;
+  const picked = sheet.reduce((n, c) => n + Number(selected.has(c.id)), 0);
 
   return (
     <main
@@ -313,13 +424,21 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
     >
       <PageHeader
         tag={
-          <Tag icon={<Layers strokeWidth={1.5} />}>
-            Разложено {counts.placed} из {counts.placed + counts.left}
-            {developing.done < developing.total && ` · проявлено ${developing.done} из ${developing.total}`}
-          </Tag>
+          mode === "deck" ? (
+            <Tag icon={<Layers strokeWidth={1.5} />}>
+              Разложено {counts.placed} из {counts.placed + counts.left}
+              {developing.done < developing.total && ` · проявлено ${developing.done} из ${developing.total}`}
+            </Tag>
+          ) : (
+            <Tag icon={<LayoutGrid strokeWidth={1.5} />}>
+              Контактный лист · {onScreen} из {sheet.length} на экране
+              {developing.done < developing.total && ` · проявлено ${developing.done} из ${developing.total}`}
+            </Tag>
+          )
         }
-        light="В колоде"
-        bold={String(Math.max(counts.left, 0))}
+        light={mode === "deck" ? "В колоде" : "На столе,"}
+        bold={mode === "deck" ? String(Math.max(counts.left, 0)) : picked ? `отмечено ${picked}` : cardsWord(sheet.length)}
+        actions={<Segment label="Режим" options={MODES} value={mode} onChange={switchMode} />}
       />
 
       {empty ? (
@@ -330,6 +449,15 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
           </p>
           <Button onClick={onReload}>Проверить папку ещё раз</Button>
         </div>
+      ) : mode === "table" ? (
+        <ContactSheet
+          cards={sheet}
+          selected={selected}
+          cacheDir={initial.cacheDir}
+          onSelect={setSelected}
+          onDragStart={dragStrip}
+          onVisible={setOnScreen}
+        />
       ) : (
         <div ref={center} className="flex min-h-0 flex-1 items-stretch gap-12">
           <LastMove move={last} onUndo={undo} />
@@ -395,7 +523,11 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
       )}
 
       <div className="flex items-center gap-3">
-        <div className="text-[13px] font-medium text-dim">Стопки · {piles.filter((p) => !p.isTrash).length}</div>
+        {mode === "table" && picked > 0 ? (
+          <span className="flex h-9 shrink-0 items-center rounded-full bg-fg px-3.5 text-[13px] font-bold text-ink">Отмечено {picked}</span>
+        ) : (
+          <div className="shrink-0 text-[13px] font-medium text-dim">Стопки · {piles.filter((p) => !p.isTrash).length}</div>
+        )}
         <SearchField
           ref={search}
           size={36}
@@ -406,12 +538,23 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        {query && (
+        {query ? (
           <span className="truncate text-[13px] text-dim">
             {matches?.length ? `Enter — в «${matches[0].name}» · ` : "Такой стопки нет · "}Shift Enter — новая стопка «{query.trim()}»
+            {mode === "table" && " · Esc — очистить"}
           </span>
+        ) : (
+          mode === "table" && (
+            <span className="truncate text-[13px] text-dim">
+              {picked
+                ? "Клавиша стопки — положить отмеченные · Esc — снять отметки"
+                : "Клик — отметить · Shift клик — диапазон · Ctrl A — все на экране"}
+            </span>
+          )
         )}
         <div className="flex-1" />
+        {mode === "table" && !query && <LastMoveLine move={last} onUndo={undo} />}
+        {mode === "deck" && (
         <Button
           size={36}
           icon={<Plus className="h-3.5 w-3.5" strokeWidth={1.5} />}
@@ -422,6 +565,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
         >
           Новая стопка
         </Button>
+        )}
       </div>
       {piles.filter((p) => !p.isTrash).length === 0 && (
         <p className="m-0 -mb-2 text-[13px] text-dim">Стопок пока нет. Напечатай название и нажми Shift Enter — создашь первую.</p>
@@ -430,8 +574,8 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
         piles={piles}
         hot={hot}
         dim={matches ? new Set(matches.map((m) => m.id)) : null}
-        onPick={(p) => place(p, "key")}
-        onDrop={(p) => place(p, "drag")}
+        onPick={(p) => put(p, "key")}
+        onDrop={(p) => put(p, "drag")}
         onMenu={(pile, x, y) => setMenu({ pile, x, y })}
       />
 

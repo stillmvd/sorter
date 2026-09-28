@@ -1,20 +1,13 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
 import { errorText, ipc, type AppState } from "../../lib/ipc";
+import { plural } from "../../lib/plural";
 import { Button } from "../ui/Button";
 import { Heading } from "../ui/PageHeader";
 import { Toggle } from "../ui/Toggle";
 
 const gb = (bytes: number) =>
   bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1).replace(".", ",")} ГБ` : `${Math.round(bytes / 1024 ** 2)} МБ`;
-
-function plural(n: number, one: string, few: string, many: string) {
-  const m10 = n % 10;
-  const m100 = n % 100;
-  if (m10 === 1 && m100 !== 11) return one;
-  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
-  return many;
-}
 
 function Step({
   n,
