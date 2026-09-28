@@ -59,6 +59,7 @@ pub fn run() {
             commands::create_pile,
             commands::rename_pile,
             commands::set_pile_key,
+            commands::remove_pile,
             commands::develop_control,
         ])
         .run(tauri::generate_context!())

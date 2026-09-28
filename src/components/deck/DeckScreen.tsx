@@ -1,5 +1,5 @@
-import { openPath } from "@tauri-apps/plugin-opener";
-import { Layers, Plus } from "lucide-react";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { FolderOpen, Layers, Plus } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { errorText, ipc, onCard, onDeckChanged, onPilesChanged, onProgress, type AppState, type Card, type Method, type Move, type Pile } from "../../lib/ipc";
 import { isTypingChar, keyOf } from "../../lib/keys";
@@ -7,6 +7,8 @@ import { play } from "../../lib/sound";
 import { Flights, motionOff, pileElement, shake, snapshot, type Flight } from "../fx/Flight";
 import { FilmStrip, seekFrame } from "./FilmStrip";
 import { KeyLegend } from "./KeyLegend";
+import { PileMenu } from "./PileMenu";
+import { VolumeRow } from "./VolumeRow";
 import { Button } from "../ui/Button";
 import { Heading, PageHeader, Tag } from "../ui/PageHeader";
 import { SearchField } from "../ui/SearchField";
@@ -35,6 +37,9 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
   const [toast, setToast] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
   const [muted, setMuted] = useState(initial.settings.muted !== "0");
+  const [volume, setVolume] = useState(() => Number(initial.settings.volume ?? "0.7"));
+  const [menu, setMenu] = useState<{ pile: Pile; x: number; y: number } | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
   const [broken, setBroken] = useState<Set<number>>(() => new Set());
   const [zone, setZone] = useState(420);
   const [flights, setFlights] = useState<Flight[]>([]);
@@ -183,13 +188,47 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
     }
   }, []);
 
+  const changeVolume = (v: number) => {
+    const next = Math.max(0, Math.min(1, Math.round(v * 20) / 20));
+    setVolume(next);
+    void ipc.setSetting("volume", String(next));
+    if (muted && next > 0) {
+      setMuted(false);
+      void ipc.setSetting("muted", "0");
+    }
+  };
+
+  const toggleMute = () => {
+    setMuted((m) => {
+      void ipc.setSetting("muted", m ? "0" : "1");
+      return !m;
+    });
+  };
+
+  const removePile = async (pile: Pile) => {
+    setMenu(null);
+    try {
+      setPiles(await ipc.removePile(pile.id));
+      play("defer");
+    } catch (e) {
+      play("error");
+      setToast(errorText(e));
+    }
+  };
+
   const handler = useRef<(e: KeyboardEvent) => void>(() => undefined);
   handler.current = (e: KeyboardEvent) => {
+    if (menu) return;
     const active = document.activeElement;
     const inSearch = active === search.current;
     if (e.ctrlKey && e.code === "KeyZ") {
       e.preventDefault();
       void undo();
+      return;
+    }
+    if (e.ctrlKey && e.code === "KeyE") {
+      e.preventDefault();
+      if (current) void revealItemInDir(current.path);
       return;
     }
     if (e.ctrlKey && e.code === "KeyO") {
@@ -225,6 +264,11 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
       setQuery("");
       return;
     }
+    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      e.preventDefault();
+      changeVolume((muted ? 0 : volume) + (e.key === "ArrowUp" ? 0.1 : -0.1));
+      return;
+    }
     if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && current) {
       e.preventDefault();
       seekFrame(current, e.key === "ArrowLeft" ? -1 : 1);
@@ -244,10 +288,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
     }
     if (k === "M") {
       e.preventDefault();
-      setMuted((m) => {
-        void ipc.setSetting("muted", m ? "0" : "1");
-        return !m;
-      });
+      toggleMute();
       return;
     }
     if (isTypingChar(e)) {
@@ -269,10 +310,6 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
   return (
     <main
       className="relative mx-2 mb-2 flex min-h-0 flex-1 flex-col gap-[18px] rounded-[28px] bg-cosmic px-10 py-7"
-      onPointerUp={(e) => {
-        const button = (e.target as HTMLElement).closest("button");
-        if (button) window.setTimeout(() => button.blur(), 0);
-      }}
     >
       <PageHeader
         tag={
@@ -306,6 +343,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
               broken={broken}
               onBroken={(id) => setBroken((b) => new Set(b).add(id))}
               onTogglePause={() => setPaused((p) => !p)}
+              volume={volume}
               onDragStart={(e) => {
                 e.dataTransfer.setData("text/plain", String(current.id));
                 e.dataTransfer.effectAllowed = "move";
@@ -313,9 +351,20 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
             />
           )}
           {current && (
-            <div className="flex min-w-0 flex-1 flex-col justify-center gap-3.5">
+            <div className="flex min-w-0 flex-1 flex-col justify-center gap-3">
               <div className="flex flex-col gap-1">
-                <div className="truncate text-lg font-bold">{current.fileName}</div>
+                <div className="flex min-w-0 items-center gap-2">
+                  <div className="truncate text-lg font-bold">{current.fileName}</div>
+                  <button
+                    type="button"
+                    aria-label="Показать в проводнике"
+                    title="Показать в проводнике — Ctrl E"
+                    onClick={() => revealItemInDir(current.path)}
+                    className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-dim transition-colors duration-200 ease-trail hover:bg-raised hover:text-fg"
+                  >
+                    <FolderOpen className="h-4 w-4" strokeWidth={1.5} />
+                  </button>
+                </div>
                 <div className="text-[13px] font-medium text-dim">
                   {[
                     current.takenAt ? date(current.takenAt) : null,
@@ -327,7 +376,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
                 </div>
               </div>
               <FilmStrip card={current} cacheDir={initial.cacheDir} />
-              <div className="flex gap-2">
+              <div className="flex items-center gap-2">
                 <Button onClick={defer} hotkey="Tab" disabled={cards.length < 2}>
                   В конец колоды
                 </Button>
@@ -336,6 +385,8 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
                     Открыть в плеере
                   </Button>
                 )}
+                <div className="flex-1" />
+                <VolumeRow muted={muted} volume={volume} onMute={toggleMute} onVolume={changeVolume} />
               </div>
               <KeyLegend muted={muted} />
             </div>
@@ -381,9 +432,11 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
         dim={matches ? new Set(matches.map((m) => m.id)) : null}
         onPick={(p) => place(p, "key")}
         onDrop={(p) => place(p, "drag")}
+        onMenu={(pile, x, y) => setMenu({ pile, x, y })}
       />
 
       <Flights flights={flights} onDone={landed} />
+      {menu && <PileMenu pile={menu.pile} x={menu.x} y={menu.y} onRemove={() => removePile(menu.pile)} onClose={closeMenu} />}
       {toast && (
         <div
           role="status"

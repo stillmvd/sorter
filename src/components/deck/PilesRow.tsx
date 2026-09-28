@@ -16,7 +16,9 @@ export function PilesRow({
   dim,
   onPick,
   onDrop,
+  onMenu,
 }: {
+  onMenu: (pile: Pile, x: number, y: number) => void;
   piles: Pile[];
   hot: number | null;
   dim: Set<number> | null;
@@ -35,6 +37,10 @@ export function PilesRow({
             data-pile-id={p.id}
             title={p.isTrash ? "Отправить в корзину Windows — ход можно забрать" : `Положить в «${p.name}»`}
             onClick={() => onPick(p)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              if (!p.isTrash) onMenu(p, e.clientX, e.clientY);
+            }}
             onDragOver={(e) => {
               e.preventDefault();
               e.dataTransfer.dropEffect = "move";

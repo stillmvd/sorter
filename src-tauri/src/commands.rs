@@ -18,7 +18,7 @@ pub struct AppState {
     pub wake: Arc<AtomicBool>,
 }
 
-const SETTING_KEYS: [&str; 6] = ["deck_path", "table_path", "hints_enabled", "theme", "muted", "mode"];
+const SETTING_KEYS: [&str; 7] = ["deck_path", "table_path", "hints_enabled", "theme", "muted", "mode", "volume"];
 
 impl AppState {
     pub fn conn(&self) -> MutexGuard<'_, Connection> {
@@ -169,7 +169,7 @@ pub fn choose_table(state: State<AppState>, path: String) -> AppResult<Vec<PileV
 
 #[tauri::command]
 pub fn set_setting_cmd(state: State<AppState>, key: String, value: String) -> AppResult<()> {
-    if !["hints_enabled", "theme", "muted", "mode"].contains(&key.as_str()) {
+    if !["hints_enabled", "theme", "muted", "mode", "volume"].contains(&key.as_str()) {
         return Err(AppError::new("BAD_SETTING", "Такой настройки нет."));
     }
     set_setting(&state.conn(), &key, &value)?;
@@ -285,4 +285,12 @@ pub fn develop_control(state: State<AppState>, pause: bool) -> AppResult<()> {
     state.paused.store(pause, Ordering::Relaxed);
     state.wake.store(true, Ordering::Relaxed);
     Ok(())
+}
+
+#[tauri::command]
+pub fn remove_pile(state: State<AppState>, pile_id: i64) -> AppResult<Vec<PileView>> {
+    let conn = state.conn();
+    let (_, t) = paths(&conn)?;
+    piles::remove(&conn, pile_id)?;
+    piles::list(&conn, &t)
 }

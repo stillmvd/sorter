@@ -25,7 +25,9 @@ function Face({
   onBroken,
   broken,
   onTogglePause,
+  volume,
 }: {
+  volume: number;
   onTogglePause: () => void;
   card: CardData;
   active: boolean;
@@ -45,6 +47,10 @@ function Face({
     if (active && !paused) void v.play().catch(() => undefined);
     else v.pause();
   }, [active, paused]);
+
+  useEffect(() => {
+    if (ref.current) ref.current.volume = volume;
+  }, [volume]);
 
   const brokenRef = useRef(onBroken);
   brokenRef.current = onBroken;
@@ -120,7 +126,9 @@ export function CardStack({
   onBroken,
   onDragStart,
   onTogglePause,
+  volume,
 }: {
+  volume: number;
   onTogglePause: () => void;
   cards: CardData[];
   number: number;
@@ -184,6 +192,7 @@ export function CardStack({
             broken={broken.has(card.id)}
             onBroken={() => onBroken(card.id)}
             onTogglePause={onTogglePause}
+            volume={volume}
             onRatio={(r) => setMeasured((m) => (m[card.id] === r ? m : { ...m, [card.id]: r }))}
           />
         </div>

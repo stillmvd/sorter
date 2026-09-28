@@ -16,6 +16,7 @@ const ROWS: { keys: string[]; label: string }[] = [
   { keys: ["Space"], label: "пауза — или клик по видео" },
   { keys: ["←", "→"], label: "кадр плёнки назад / вперёд" },
   { keys: ["M"], label: "звук" },
+  { keys: ["↑", "↓"], label: "громкость видео" },
   { keys: ["/"], label: "искать стопку" },
 ];
 
@@ -27,7 +28,7 @@ export function KeyLegend({ muted }: { muted: boolean }) {
           <span className="flex w-[104px] shrink-0 items-center gap-1">
             {r.keys.map((k, i) => (
               <span key={k} className="flex items-center gap-1">
-                {i > 0 && <span className="text-[11px]">{r.keys[0] === "1–9" || r.keys[0] === "←" ? "" : "+"}</span>}
+                {i > 0 && <span className="text-[11px]">{r.keys[0] === "1–9" || r.keys[0] === "←" || r.keys[0] === "↑" ? "" : "+"}</span>}
                 <Cap>{k}</Cap>
               </span>
             ))}

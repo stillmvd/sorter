@@ -154,6 +154,31 @@ pub fn rename(conn: &Connection, pile_id: i64, name: &str) -> AppResult<()> {
     Ok(())
 }
 
+pub fn remove(conn: &Connection, pile_id: i64) -> AppResult<()> {
+    let (table, name, is_trash): (String, String, bool) = conn
+        .query_row("SELECT table_path, name, is_trash FROM pile WHERE id = ?1", params![pile_id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .optional()?
+        .ok_or_else(|| AppError::new("PILE_GONE", "Такой стопки больше нет."))?;
+    if is_trash {
+        return Err(AppError::new("BAD_NAME", "Корзину удалить нельзя."));
+    }
+    let dir = Path::new(&table).join(&name);
+    let has_files = fs::read_dir(&dir).map(|mut it| it.next().is_some()).unwrap_or(false);
+    if has_files {
+        return Err(AppError::new(
+            "PILE_NOT_EMPTY",
+            format!("В стопке «{name}» есть файлы. Sorter удаляет только пустые стопки — сначала забери или переложи их."),
+        ));
+    }
+    if dir.exists() {
+        fs::remove_dir(&dir).map_err(|e| io_error(&e, &dir))?;
+    }
+    conn.execute("UPDATE pile SET exists_on_disk = 0, key = NULL WHERE id = ?1", params![pile_id])?;
+    Ok(())
+}
+
 pub fn set_key(conn: &Connection, pile_id: i64, key: Option<&str>) -> AppResult<()> {
     let table: String = conn.query_row(
         "SELECT table_path FROM pile WHERE id = ?1 AND is_trash = 0",
@@ -232,6 +257,21 @@ mod tests {
         assert!(t.path().join("Кино и сериалы").exists());
         let to: String = conn.query_row("SELECT to_path FROM move_item", [], |r| r.get(0)).unwrap();
         assert!(to.contains("Кино и сериалы"));
+    }
+
+    #[test]
+    fn removes_only_empty() {
+        let (t, table, conn) = setup(&["Пусто", "Полно"]);
+        fs::write(t.path().join("Полно").join("a.mp4"), b"a").unwrap();
+        let piles = list(&conn, &table).unwrap();
+        let id = |n: &str| piles.iter().find(|p| p.name == n).unwrap().id;
+        assert_eq!(remove(&conn, id("Полно")).unwrap_err().code, "PILE_NOT_EMPTY");
+        remove(&conn, id("Пусто")).unwrap();
+        assert!(!t.path().join("Пусто").exists());
+        assert!(t.path().join("Полно").join("a.mp4").exists());
+        assert_eq!(list(&conn, &table).unwrap().len(), 2);
+        create(&conn, &table, "Пусто").unwrap();
+        assert_eq!(list(&conn, &table).unwrap().len(), 3);
     }
 
     #[test]

@@ -52,7 +52,7 @@ export type Move = {
 
 export type Hint = { pileId: number; score: number };
 
-export type Settings = Partial<Record<"deck_path" | "table_path" | "hints_enabled" | "theme" | "muted" | "mode", string>>;
+export type Settings = Partial<Record<"deck_path" | "table_path" | "hints_enabled" | "theme" | "muted" | "mode" | "volume", string>>;
 
 export type Developing = { done: number; total: number; paused: boolean };
 
@@ -98,5 +98,6 @@ export const ipc = {
   createPile: (name: string) => invoke<Pile[]>("create_pile", { name }),
   renamePile: (pileId: number, name: string) => invoke<Pile[]>("rename_pile", { pileId, name }),
   setPileKey: (pileId: number, key: string | null) => invoke<Pile[]>("set_pile_key", { pileId, key }),
+  removePile: (pileId: number) => invoke<Pile[]>("remove_pile", { pileId }),
   developControl: (pause: boolean) => invoke<void>("develop_control", { pause }),
 };
