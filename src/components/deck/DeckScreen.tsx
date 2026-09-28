@@ -434,7 +434,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
             </Tag>
           ) : (
             <Tag icon={<LayoutGrid strokeWidth={1.5} />}>
-              Контактный лист · {onScreen} из {sheet.length} на экране
+              Стол · {onScreen} из {sheet.length} на экране · веди мышью по плитке — перемотка
               {developing.done < developing.total && ` · проявлено ${developing.done} из ${developing.total}`}
             </Tag>
           )

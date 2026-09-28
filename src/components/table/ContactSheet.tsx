@@ -1,11 +1,48 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent } from "react";
 import type { Card } from "../../lib/ipc";
-import { STRIP_H, StripRow } from "./StripRow";
+import { Tile } from "./Tile";
 
-const GAP = 8;
-const ROW = STRIP_H + GAP;
-const PAD = 12;
-const OVERSCAN = 4;
+const TARGET = 234;
+const GAP = 12;
+const PAD = 16;
+const OVERSCAN = 600;
+
+type Placed = { card: Card; index: number; w: number };
+type Row = { items: Placed[]; h: number; top: number };
+
+function aspect(c: Card) {
+  const a = c.width && c.height ? c.width / c.height : c.orientation === "landscape" ? 16 / 9 : c.orientation === "square" ? 1 : 9 / 16;
+  return Math.max(0.4, Math.min(2.5, a));
+}
+
+function layout(cards: Card[], width: number): Row[] {
+  const rows: Row[] = [];
+  if (width <= 0) return rows;
+  let top = PAD;
+  let start = 0;
+  let sum = 0;
+  const close = (end: number, h: number, full: boolean) => {
+    const items: Placed[] = [];
+    let used = 0;
+    for (let i = start; i < end; i++) {
+      const last = full && i === end - 1;
+      const w = last ? width - used : Math.floor(aspect(cards[i]) * h);
+      items.push({ card: cards[i], index: i, w });
+      used += w + GAP;
+    }
+    rows.push({ items, h: Math.round(h), top });
+    top += Math.round(h) + GAP;
+    start = end;
+    sum = 0;
+  };
+  for (let i = 0; i < cards.length; i++) {
+    sum += aspect(cards[i]);
+    const gaps = (i - start) * GAP;
+    if (sum * TARGET + gaps >= width) close(i + 1, (width - gaps) / sum, true);
+  }
+  if (start < cards.length) close(cards.length, TARGET, false);
+  return rows;
+}
 
 export function ContactSheet({
   cards,
@@ -24,9 +61,7 @@ export function ContactSheet({
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [scroll, setScroll] = useState(0);
-  const [height, setHeight] = useState(0);
-  const [hover, setHover] = useState<number | null>(null);
-  const timer = useRef(0);
+  const [size, setSize] = useState({ w: 0, h: 0 });
   const anchor = useRef<number | null>(null);
   const cardsRef = useRef(cards);
   cardsRef.current = cards;
@@ -36,29 +71,29 @@ export function ContactSheet({
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
-    const ro = new ResizeObserver(([entry]) => setHeight(entry.contentRect.height));
+    const ro = new ResizeObserver(([entry]) => setSize({ w: entry.contentRect.width, h: entry.contentRect.height }));
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
 
-  const rows = Math.ceil(cards.length / 2);
-  const top = Math.max(0, Math.floor((scroll - PAD) / ROW));
-  const bottom = Math.min(rows, Math.ceil((scroll + height - PAD) / ROW));
-  const from = Math.max(0, top - OVERSCAN);
-  const to = Math.min(rows, bottom + OVERSCAN);
+  const rows = useMemo(() => layout(cards, size.w - PAD * 2), [cards, size.w]);
+  const total = rows.length ? rows[rows.length - 1].top + rows[rows.length - 1].h + PAD : 0;
+  const shown = rows.filter((r) => r.top + r.h > scroll - OVERSCAN && r.top < scroll + size.h + OVERSCAN);
   const visibleRef = useRef<Card[]>([]);
-  visibleRef.current = cards.slice(top * 2, bottom * 2);
+  visibleRef.current = rows
+    .filter((r) => r.top + r.h / 2 > scroll && r.top + r.h / 2 < scroll + size.h)
+    .flatMap((r) => r.items.map((p) => p.card));
   const onScreen = visibleRef.current.length;
 
   useEffect(() => onVisible(onScreen), [onScreen, onVisible]);
-
-  useEffect(() => () => window.clearTimeout(timer.current), []);
 
   useEffect(() => {
     const listen = (e: KeyboardEvent) => {
       if (!e.ctrlKey || e.code !== "KeyA" || document.activeElement instanceof HTMLInputElement) return;
       e.preventDefault();
-      onSelect(new Set([...selectedRef.current, ...visibleRef.current.map((c) => c.id)]));
+      const next = new Set([...selectedRef.current, ...visibleRef.current.map((c) => c.id)]);
+      selectedRef.current = next;
+      onSelect(next);
     };
     window.addEventListener("keydown", listen);
     return () => window.removeEventListener("keydown", listen);
@@ -83,33 +118,6 @@ export function ContactSheet({
     [onSelect],
   );
 
-  const hovered = useCallback((id: number | null) => {
-    window.clearTimeout(timer.current);
-    if (id === null) setHover(null);
-    else timer.current = window.setTimeout(() => setHover(id), 150);
-  }, []);
-
-  const lines = [];
-  for (let r = from; r < to; r++) {
-    lines.push(
-      <div key={r} className="absolute inset-x-4 grid grid-cols-2 gap-x-4" style={{ top: PAD + r * ROW }}>
-        {cards.slice(r * 2, r * 2 + 2).map((card, k) => (
-          <StripRow
-            key={card.id}
-            card={card}
-            no={r * 2 + k + 1}
-            cacheDir={cacheDir}
-            selected={selected.has(card.id)}
-            playing={hover === card.id}
-            onPick={pick}
-            onHover={hovered}
-            onDragStart={onDragStart}
-          />
-        ))}
-      </div>,
-    );
-  }
-
   return (
     <div
       ref={box}
@@ -117,8 +125,24 @@ export function ContactSheet({
       className="relative min-h-0 flex-1 overflow-y-auto rounded-[20px] bg-film [--scroll-inset:20px]"
       style={{ "--strong": "#3c3c3f" } as CSSProperties}
     >
-      <div style={{ height: rows ? PAD * 2 + rows * ROW - GAP : 0 }} />
-      {lines}
+      <div style={{ height: total }} />
+      {shown.map((r) => (
+        <div key={r.items[0].card.id} className="absolute flex" style={{ top: r.top, left: PAD, gap: GAP }}>
+          {r.items.map((p) => (
+            <Tile
+              key={p.card.id}
+              card={p.card}
+              no={p.index + 1}
+              w={p.w}
+              h={r.h}
+              cacheDir={cacheDir}
+              selected={selected.has(p.card.id)}
+              onPick={pick}
+              onDragStart={onDragStart}
+            />
+          ))}
+        </div>
+      ))}
     </div>
   );
 }
