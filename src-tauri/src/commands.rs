@@ -1,6 +1,7 @@
 use crate::db::{get_setting, set_setting};
 use crate::deck::{self, CardView};
 use crate::error::{AppError, AppResult};
+use crate::hints;
 use crate::moves::{self, MoveView};
 use crate::piles::{self, PileView};
 use rusqlite::{params, Connection};
@@ -195,6 +196,7 @@ pub struct Placed {
 pub fn place(state: State<AppState>, card_ids: Vec<i64>, pile_id: i64, method: String) -> AppResult<Placed> {
     let mut conn = state.conn();
     let mv = moves::place(&mut conn, &card_ids, pile_id, &method)?;
+    hints::learn(&conn)?;
     let (_, t) = paths(&conn)?;
     Ok(Placed { mv, piles: piles::list(&conn, &t)? })
 }
@@ -214,6 +216,7 @@ pub struct Undone {
 }
 
 fn undone(conn: &Connection, mv: Option<MoveView>) -> AppResult<Undone> {
+    hints::prune(conn)?;
     let ids: Vec<i64> = mv.as_ref().map(|m| m.items.iter().map(|i| i.card_id).collect()).unwrap_or_default();
     let (_, t) = paths(conn)?;
     Ok(Undone { cards: deck::cards(conn, &ids)?, piles: piles::list(conn, &t)?, mv })
@@ -242,8 +245,15 @@ pub struct UndoneMany {
 
 #[tauri::command]
 pub fn undo_since(state: State<AppState>, since: i64) -> AppResult<UndoneMany> {
-    let (undone, failed) = moves::undo_since(&state.conn(), since)?;
+    let conn = state.conn();
+    let (undone, failed) = moves::undo_since(&conn, since)?;
+    hints::prune(&conn)?;
     Ok(UndoneMany { undone, failed })
+}
+
+#[tauri::command]
+pub fn hints(state: State<AppState>, card_ids: Vec<i64>) -> AppResult<hints::HintsView> {
+    Ok(hints::suggest(&state.conn(), &card_ids)?)
 }
 
 #[tauri::command]

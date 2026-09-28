@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } 
 import { errorText, ipc, onCard, onDeckChanged, onPilesChanged, onProgress, type AppState, type Card, type Method, type Move, type Pile } from "../../lib/ipc";
 import { isTypingChar, keyOf } from "../../lib/keys";
 import { cardsWord } from "../../lib/plural";
+import { useHints } from "../../lib/useHints";
+import { HintBox } from "./HintBox";
 import { play } from "../../lib/sound";
 import { pressToDrag } from "../fx/Drag";
 import { Flights, motionOff, pileElement, shake, snapshot, type Flight } from "../fx/Flight";
@@ -141,8 +143,14 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
   }, []);
 
   const matches = useMemo(() => rank(piles, query), [piles, query]);
-  const hot = matches?.[0]?.id ?? null;
   const current = cards[0];
+  const hintIds = useMemo(
+    () => (mode === "deck" ? (current ? [current.id] : []) : sheet.filter((c) => selected.has(c.id)).map((c) => c.id)),
+    [mode, current, sheet, selected],
+  );
+  const hints = useHints(hintIds, piles);
+  const hintPile = hints.hints[0] ? (piles.find((p) => p.id === hints.hints[0].pileId) ?? null) : null;
+  const hot = matches?.[0]?.id ?? (query ? null : (hintPile?.id ?? null));
 
   const place = useCallback(
     async (pile: Pile, method: Method) => {
@@ -403,6 +411,11 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
     }
     const onControl = active && active !== document.body && active.tagName !== "DIV";
     if (onControl && (e.key === "Enter" || e.key === " " || e.key === "Tab")) return;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (hintPile) void put(hintPile, "hint");
+      return;
+    }
     if (e.key === "Escape") {
       if (query) setQuery("");
       else if (mode === "table") setSelected(new Set());
@@ -546,6 +559,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
                 </div>
               </div>
               <FilmStrip card={current} cacheDir={initial.cacheDir} />
+              <HintBox hints={hints} piles={piles} onPlace={(p) => put(p, "hint")} />
               <div className="flex items-center gap-2">
                 <Button onClick={defer} hotkey="Tab" disabled={cards.length < 2}>
                   В конец колоды
@@ -589,7 +603,9 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
           mode === "table" && (
             <span className="truncate text-[13px] text-dim">
               {picked
-                ? "Клавиша стопки — положить отмеченные · Esc — снять отметки"
+                ? hintPile
+                  ? `Просятся в «${hintPile.name}» ${Math.round(hints.hints[0].score * 100)}% — Enter · клавиша стопки — в другую · Esc — снять отметки`
+                  : "Клавиша стопки — положить отмеченные · Esc — снять отметки"
                 : "Клик — отметить · Shift клик — диапазон · Ctrl A — все на экране"}
             </span>
           )

@@ -3,6 +3,7 @@ mod db;
 mod deck;
 mod develop;
 mod error;
+mod hints;
 mod media;
 mod moves;
 mod piles;
@@ -34,6 +35,7 @@ pub fn run() {
             if let Err(e) = moves::recover(&conn) {
                 eprintln!("recover: {e}");
             }
+            let _ = hints::prune(&conn);
             let paused = Arc::new(AtomicBool::new(false));
             let wake = Arc::new(AtomicBool::new(true));
             develop::spawn(app.handle().clone(), data_dir.join("sorter.db"), data_dir.join("cache"), paused.clone(), wake.clone());
@@ -56,6 +58,7 @@ pub fn run() {
             commands::undo_move,
             commands::undo_since,
             commands::journal,
+            commands::hints,
             commands::create_pile,
             commands::rename_pile,
             commands::set_pile_key,

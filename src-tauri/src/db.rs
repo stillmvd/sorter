@@ -73,6 +73,11 @@ pub fn init(conn: &Connection) -> rusqlite::Result<()> {
            pile_id INTEGER NOT NULL REFERENCES pile(id),
            path TEXT NOT NULL,
            vector BLOB NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS example_pile ON example(pile_id);
+         CREATE TABLE IF NOT EXISTS embedding (
+           card_id INTEGER PRIMARY KEY REFERENCES card(id),
+           vector BLOB NOT NULL
          );",
     )?;
     conn.execute(

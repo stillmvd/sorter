@@ -1,5 +1,7 @@
 use crate::db;
 use crate::deck::{self, CardView};
+use crate::hints::{self, Engine};
+use std::collections::HashSet;
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::fs;
@@ -246,6 +248,87 @@ fn save(conn: &Connection, id: i64, result: Option<Developed>) -> rusqlite::Resu
     Ok(())
 }
 
+struct Learner {
+    engine: Option<Engine>,
+    failed: bool,
+    cold: Vec<(i64, PathBuf)>,
+    cold_at: Option<Instant>,
+    skip: HashSet<PathBuf>,
+}
+
+impl Learner {
+    fn new() -> Self {
+        Learner { engine: None, failed: false, cold: Vec::new(), cold_at: None, skip: HashSet::new() }
+    }
+
+    fn step(&mut self, app: &AppHandle, conn: &Connection, cache: &Path) -> bool {
+        if self.failed || !hints::enabled(conn) {
+            return false;
+        }
+        let ids = hints::to_embed(conn, 4).unwrap_or_default();
+        let cold = if ids.is_empty() {
+            if self.cold.is_empty() && self.cold_at.is_none_or(|t| t.elapsed() > Duration::from_secs(60)) {
+                self.cold = hints::cold_files(conn).unwrap_or_default();
+                self.cold.retain(|(_, p)| !self.skip.contains(p));
+                self.cold.reverse();
+                self.cold_at = Some(Instant::now());
+            }
+            self.cold.pop()
+        } else {
+            None
+        };
+        if ids.is_empty() && cold.is_none() {
+            return false;
+        }
+        if self.engine.is_none() {
+            match Engine::load(&cache.parent().unwrap_or(cache).join("runtime")) {
+                Ok(e) => {
+                    eprintln!("hints: движок на {}", e.device);
+                    self.engine = Some(e);
+                }
+                Err(e) => {
+                    eprintln!("hints: {e}");
+                    self.failed = true;
+                    return false;
+                }
+            }
+        }
+        let engine = self.engine.as_mut().unwrap();
+        for id in &ids {
+            let frames = hints::card_frames(cache, *id);
+            let vector = engine.embed(&frames).ok().and_then(|vs| hints::mean(&vs));
+            if hints::store(conn, *id, vector.as_deref()).is_ok() {
+                if let Ok(cards) = deck::cards(conn, &[*id]) {
+                    let _ = app.emit("develop://card", cards.first());
+                }
+            }
+        }
+        if let Some((pile, path)) = cold {
+            let vector = read_frames(&path)
+                .and_then(|frames| engine.embed(&frames[2.min(frames.len())..6.min(frames.len())]).ok())
+                .and_then(|vs| hints::mean(&vs));
+            match vector {
+                Some(v) => {
+                    let _ = hints::add_cold(conn, pile, &path, &v);
+                }
+                None => {
+                    self.skip.insert(path);
+                }
+            }
+        }
+        let _ = hints::learn(conn);
+        let _ = app.emit("hints://changed", ());
+        true
+    }
+}
+
+pub fn read_frames(path: &Path) -> Option<Vec<image::RgbImage>> {
+    #[cfg(windows)]
+    return mf::read(path).ok().map(|m| m.frames).filter(|f| !f.is_empty());
+    #[cfg(not(windows))]
+    None
+}
+
 pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<AtomicBool>, wake: Arc<AtomicBool>) {
     std::thread::spawn(move || {
         #[cfg(windows)]
@@ -253,6 +336,7 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<Atomi
         let Ok(conn) = db::open(&db_path) else { return };
         let mut last_emit = Instant::now() - Duration::from_secs(1);
         let mut was_busy = false;
+        let mut learner = Learner::new();
         loop {
             let is_paused = paused.load(Ordering::Relaxed);
             let jobs = if is_paused { Vec::new() } else { next(&conn, workers()).unwrap_or_default() };
@@ -275,6 +359,9 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<Atomi
                     }
                 }
                 true => {
+                    if !is_paused && learner.step(&app, &conn, &cache) {
+                        continue;
+                    }
                     if was_busy || wake.swap(false, Ordering::Relaxed) {
                         if let Ok(p) = progress(&conn, is_paused) {
                             let _ = app.emit("develop://progress", p);

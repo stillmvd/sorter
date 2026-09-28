@@ -11,3 +11,5 @@ Thumbs.db
 .specify/
 CLAUDE.md
 HANDOFF.md
+src-tauri/resources/*.dll
+src-tauri/resources/*.onnx

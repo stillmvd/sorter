@@ -7,3 +7,5 @@ export function plural(n: number, one: string, few: string, many: string) {
 }
 
 export const cardsWord = (n: number) => `${n} ${plural(n, "карта", "карты", "карт")}`;
+
+export const onCardsWord = (n: number) => `${n} ${plural(n, "карте", "картах", "картах")}`;

@@ -52,6 +52,8 @@ export type Move = {
 
 export type Hint = { pileId: number; score: number };
 
+export type Hints = { enabled: boolean; ready: boolean; examples: number; hints: Hint[] };
+
 export type Settings = Partial<Record<"deck_path" | "table_path" | "hints_enabled" | "theme" | "muted" | "mode" | "volume", string>>;
 
 export type Developing = { done: number; total: number; paused: boolean };
@@ -80,6 +82,7 @@ export const onCard = (fn: (card: Card) => void) => listen<Card>("develop://card
 export const onDeckChanged = (fn: (d: { added: Card[]; gone: number[] }) => void) =>
   listen<{ added: Card[]; gone: number[] }>("deck://changed", (e) => fn(e.payload));
 export const onPilesChanged = (fn: (p: Pile[]) => void) => listen<Pile[]>("piles://changed", (e) => fn(e.payload));
+export const onHintsChanged = (fn: () => void) => listen("hints://changed", () => fn());
 export const onProgress = (fn: (p: Developing) => void) => listen<Developing>("develop://progress", (e) => fn(e.payload));
 
 export const ipc = {
@@ -99,5 +102,6 @@ export const ipc = {
   renamePile: (pileId: number, name: string) => invoke<Pile[]>("rename_pile", { pileId, name }),
   setPileKey: (pileId: number, key: string | null) => invoke<Pile[]>("set_pile_key", { pileId, key }),
   removePile: (pileId: number) => invoke<Pile[]>("remove_pile", { pileId }),
+  hints: (cardIds: number[]) => invoke<Hints>("hints", { cardIds }),
   developControl: (pause: boolean) => invoke<void>("develop_control", { pause }),
 };

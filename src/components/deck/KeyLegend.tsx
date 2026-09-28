@@ -8,7 +8,7 @@ function Cap({ children }: { children: string }) {
 
 const ROWS: { keys: string[]; label: string }[] = [
   { keys: ["1–9", "Q…P"], label: "положить в стопку" },
-  { keys: ["Enter"], label: "в найденную стопку" },
+  { keys: ["Enter"], label: "в подсказанную или найденную стопку" },
   { keys: ["Shift", "Enter"], label: "новая стопка из поиска" },
   { keys: ["Del"], label: "в корзину" },
   { keys: ["Tab"], label: "в конец колоды" },
