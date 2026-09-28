@@ -3,6 +3,9 @@ import { Layers, Plus } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { errorText, ipc, type AppState, type Card, type Method, type Move, type Pile } from "../../lib/ipc";
 import { isTypingChar, keyOf } from "../../lib/keys";
+import { play } from "../../lib/sound";
+import { Flights, motionOff, pileElement, shake, snapshot, type Flight } from "../fx/Flight";
+import { KeyLegend } from "./KeyLegend";
 import { Button } from "../ui/Button";
 import { Heading, PageHeader, Tag } from "../ui/PageHeader";
 import { SearchField } from "../ui/SearchField";
@@ -33,6 +36,12 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
   const [muted, setMuted] = useState(initial.settings.muted !== "0");
   const [broken, setBroken] = useState<Set<number>>(() => new Set());
   const [zone, setZone] = useState(420);
+  const [flights, setFlights] = useState<Flight[]>([]);
+  const flightSeq = useRef(0);
+  const landed = useCallback((f: Flight) => {
+    setFlights((list) => list.filter((x) => x.id !== f.id));
+    shake(f.pileId);
+  }, []);
   const pending = useRef(new Set<number>());
   const search = useRef<HTMLInputElement>(null);
   const center = useRef<HTMLDivElement>(null);
@@ -47,6 +56,11 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
 
   useEffect(() => {
     void refill();
+    void ipc.getState().then((st) => {
+      setCounts(st.deck);
+      setPiles(st.piles);
+    });
+    void ipc.journal(null, 20).then((recent) => setLast(recent.find((m) => m.state === "done") ?? null));
   }, [refill]);
 
   useEffect(() => {
@@ -71,6 +85,16 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
     async (pile: Pile, method: Method) => {
       const card = cardsRef.current[0];
       if (!card) return;
+      play(pile.isTrash ? "trash" : method === "new_pile" ? "new_pile" : "place");
+      const target = pileElement(pile.id);
+      const snap = method !== "drag" && !motionOff() ? snapshot() : null;
+      if (snap && target) {
+        const id = ++flightSeq.current;
+        setFlights((f) => [...f, { id, pileId: pile.id, from: snap.rect, to: target.getBoundingClientRect(), image: snap.image }]);
+      } else {
+        shake(pile.id);
+      }
+      setPaused(false);
       pending.current.add(card.id);
       setCards((cs) => cs.filter((c) => c.id !== card.id));
       setCounts((c) => ({ ...c, left: c.left - 1, placed: c.placed + 1 }));
@@ -80,7 +104,9 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
         const r = await ipc.place([card.id], pile.id, method);
         setPiles(r.piles);
         setLast(r.move);
+        if (cardsRef.current.length === 0) play("empty");
       } catch (e) {
+        play("error");
         setCards((cs) => [card, ...cs.filter((c) => c.id !== card.id)]);
         setCounts((c) => ({ ...c, left: c.left + 1, placed: c.placed - 1 }));
         setToast(errorText(e));
@@ -113,12 +139,15 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
         setToast("Забирать нечего — ходов ещё не было.");
         return;
       }
+      play("undo");
       const back = r.cards;
       setCards((cs) => [...back, ...cs.filter((c) => !back.some((b) => b.id === c.id))]);
       setCounts((c) => ({ ...c, left: c.left + back.length, placed: c.placed - back.length }));
       setPiles(r.piles);
-      setLast(null);
+      const recent = await ipc.journal(null, 20);
+      setLast(recent.find((m) => m.state === "done") ?? null);
     } catch (e) {
+      play("error");
       setToast(errorText(e));
     }
   }, []);
@@ -126,6 +155,8 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
   const defer = useCallback(async () => {
     const card = cardsRef.current[0];
     if (!card || cardsRef.current.length < 2) return;
+    play("defer");
+    setPaused(false);
     setCards((cs) => [...cs.slice(1), card]);
     try {
       await ipc.defer(card.id);
@@ -250,6 +281,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
               paused={paused}
               broken={broken}
               onBroken={(id) => setBroken((b) => new Set(b).add(id))}
+              onTogglePause={() => setPaused((p) => !p)}
               onDragStart={(e) => {
                 e.dataTransfer.setData("text/plain", String(current.id));
                 e.dataTransfer.effectAllowed = "move";
@@ -280,9 +312,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
                   </Button>
                 )}
               </div>
-              <p className="m-0 text-[13px] leading-normal text-dim">
-                Клавиша стопки — положить сразу · начни печатать — найдёшь стопку · Пробел — пауза · M — звук{muted ? "" : " (включён)"}
-              </p>
+              <KeyLegend muted={muted} />
             </div>
           )}
         </div>
@@ -328,6 +358,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
         onDrop={(p) => place(p, "drag")}
       />
 
+      <Flights flights={flights} onDone={landed} />
       {toast && (
         <div
           role="status"

@@ -32,6 +32,7 @@ export function PilesRow({
           <button
             key={p.id}
             type="button"
+            data-pile-id={p.id}
             title={p.isTrash ? "Отправить в корзину Windows — ход можно забрать" : `Положить в «${p.name}»`}
             onClick={() => onPick(p)}
             onDragOver={(e) => {

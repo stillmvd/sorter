@@ -1,6 +1,25 @@
-import { Undo2 } from "lucide-react";
-import type { Move } from "../../lib/ipc";
+import { Trash2, Undo2 } from "lucide-react";
+import { media, type Move } from "../../lib/ipc";
 import { Button } from "../ui/Button";
+
+function Thumb({ move }: { move: Move }) {
+  const item = move.items[0];
+  const src = item.toPath ? `${media(item.toPath)}#t=0.5` : null;
+  return (
+    <div className="relative h-[84px] w-14 shrink-0">
+      {move.items.length > 1 && <div className="absolute inset-0 translate-x-1.5 rotate-3 rounded-[10px] bg-strong" />}
+      <div className="absolute inset-0 -rotate-6 overflow-hidden rounded-[10px] border border-line bg-film">
+        {src ? (
+          <video key={src} src={src} muted preload="metadata" className="h-full w-full object-cover" />
+        ) : (
+          <div className="grid h-full place-items-center text-[#a2a2a9]">
+            <Trash2 className="h-5 w-5" strokeWidth={1.5} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export function LastMove({ move, onUndo }: { move: Move | null; onUndo: () => void }) {
   const first = move?.items[0];
@@ -10,7 +29,7 @@ export function LastMove({ move, onUndo }: { move: Move | null; onUndo: () => vo
       <div className="text-[13px] font-medium text-dim">Последний ход</div>
       {move && first ? (
         <div className="flex items-center gap-3">
-          <div className="h-[72px] w-12 shrink-0 -rotate-6 rounded-[10px] bg-raised" />
+          <Thumb move={move} />
           <div className="flex min-w-0 flex-col gap-1">
             <div className="truncate text-[13px] font-bold">
               {move.items.length > 1 ? `${move.items.length} карт` : first.fileName}

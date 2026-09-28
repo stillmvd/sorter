@@ -24,7 +24,9 @@ function Face({
   onRatio,
   onBroken,
   broken,
+  onTogglePause,
 }: {
+  onTogglePause: () => void;
   card: CardData;
   active: boolean;
   muted: boolean;
@@ -70,11 +72,13 @@ function Face({
           <video
             ref={ref}
             src={media(card.path)}
+            crossOrigin="anonymous"
             muted={muted}
             loop
             playsInline
             preload="auto"
-            className="h-full w-full object-contain"
+            className="h-full w-full cursor-pointer object-contain"
+            onClick={active ? onTogglePause : undefined}
             onLoadedMetadata={(e) => {
               const v = e.currentTarget;
               if (v.videoWidth && v.videoHeight) onRatio(v.videoWidth / v.videoHeight);
@@ -83,6 +87,13 @@ function Face({
             onTimeUpdate={(e) => setTime({ t: e.currentTarget.currentTime, d: e.currentTarget.duration || 0 })}
             onError={onBroken}
           />
+        )}
+        {paused && active && !broken && (
+          <div className="pointer-events-none absolute inset-0 grid place-items-center">
+            <span className="grid h-14 w-14 place-items-center rounded-full bg-[rgb(12_12_14/70%)] text-[#ececef]">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" /></svg>
+            </span>
+          </div>
         )}
         {broken && (
           <div className="absolute inset-0 grid place-items-center p-4 text-center text-[13px] font-medium text-[#a2a2a9]">
@@ -108,7 +119,9 @@ export function CardStack({
   broken,
   onBroken,
   onDragStart,
+  onTogglePause,
 }: {
+  onTogglePause: () => void;
   cards: CardData[];
   number: number;
   zone: number;
@@ -153,6 +166,7 @@ export function CardStack({
         <div
           key={card.id}
           ref={i === 0 ? top : undefined}
+          data-card-top={i === 0 ? "" : undefined}
           draggable={i === 0}
           onDragStart={onDragStart}
           aria-hidden={i !== 0}
@@ -169,6 +183,7 @@ export function CardStack({
             number={number + i}
             broken={broken.has(card.id)}
             onBroken={() => onBroken(card.id)}
+            onTogglePause={onTogglePause}
             onRatio={(r) => setMeasured((m) => (m[card.id] === r ? m : { ...m, [card.id]: r }))}
           />
         </div>
