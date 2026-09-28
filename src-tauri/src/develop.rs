@@ -1,6 +1,6 @@
 use crate::db;
 use crate::deck::{self, CardView};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -51,20 +51,27 @@ mod mf {
             let mut attrs = None;
             MFCreateAttributes(&mut attrs, 1)?;
             let attrs = attrs.unwrap();
-            attrs.SetUINT32(&MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, 1)?;
+            attrs.SetUINT32(&MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, 1)?;
             let reader = MFCreateSourceReaderFromURL(&HSTRING::from(path.as_os_str()), &attrs)?;
             reader.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false)?;
             reader.SetStreamSelection(VIDEO, true)?;
 
-            let rotation = reader
-                .GetNativeMediaType(VIDEO, 0)
-                .and_then(|t| t.GetUINT32(&MF_MT_VIDEO_ROTATION))
-                .unwrap_or(0);
+            let native = reader.GetNativeMediaType(VIDEO, 0)?;
+            let rotation = native.GetUINT32(&MF_MT_VIDEO_ROTATION).unwrap_or(0);
+            let size = native.GetUINT64(&MF_MT_FRAME_SIZE)?;
+            let (nw, nh) = ((size >> 32) as u32, (size & 0xFFFF_FFFF) as u32);
 
             let wanted = MFCreateMediaType()?;
             wanted.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
             wanted.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32)?;
-            reader.SetCurrentMediaType(VIDEO, None, &wanted)?;
+            let scale = (THUMB as f32 / nw.max(nh).max(1) as f32).min(1.0);
+            let tw = ((nw as f32 * scale).round() as u32).max(2) & !1;
+            let th = ((nh as f32 * scale).round() as u32).max(2) & !1;
+            wanted.SetUINT64(&MF_MT_FRAME_SIZE, (tw as u64) << 32 | th as u64)?;
+            if reader.SetCurrentMediaType(VIDEO, None, &wanted).is_err() {
+                wanted.DeleteItem(&MF_MT_FRAME_SIZE)?;
+                reader.SetCurrentMediaType(VIDEO, None, &wanted)?;
+            }
             let current = reader.GetCurrentMediaType(VIDEO)?;
             let size = current.GetUINT64(&MF_MT_FRAME_SIZE)?;
             let (w, h) = ((size >> 32) as u32, (size & 0xFFFF_FFFF) as u32);
@@ -101,27 +108,28 @@ mod mf {
                 let mut len = 0u32;
                 buffer.Lock(&mut ptr, None, Some(&mut len))?;
                 let data = std::slice::from_raw_parts(ptr, len as usize);
-                let mut img = RgbImage::new(w, h);
                 let abs = stride.unsigned_abs() as usize;
+                let mut raw = Vec::with_capacity(w as usize * h as usize * 3);
                 for y in 0..h as usize {
                     let row = if stride < 0 { h as usize - 1 - y } else { y };
                     let start = row * abs;
-                    if start + w as usize * 4 > data.len() {
-                        break;
-                    }
-                    for x in 0..w as usize {
-                        let p = start + x * 4;
-                        img.put_pixel(x as u32, y as u32, image::Rgb([data[p + 2], data[p + 1], data[p]]));
-                    }
+                    let Some(line) = data.get(start..start + w as usize * 4) else { break };
+                    raw.extend(line.chunks_exact(4).flat_map(|p| [p[2], p[1], p[0]]));
                 }
                 buffer.Unlock()?;
-                let scale = THUMB as f32 / w.max(h) as f32;
-                let mut small = imageops::resize(
-                    &img,
-                    ((w as f32 * scale).round() as u32).max(1),
-                    ((h as f32 * scale).round() as u32).max(1),
-                    imageops::FilterType::Triangle,
-                );
+                raw.resize(w as usize * h as usize * 3, 0);
+                let img = RgbImage::from_raw(w, h, raw).unwrap();
+                let mut small = if w.max(h) > THUMB {
+                    let scale = THUMB as f32 / w.max(h) as f32;
+                    imageops::resize(
+                        &img,
+                        ((w as f32 * scale).round() as u32).max(1),
+                        ((h as f32 * scale).round() as u32).max(1),
+                        imageops::FilterType::Triangle,
+                    )
+                } else {
+                    img
+                };
                 small = match rotation {
                     90 => imageops::rotate90(&small),
                     180 => imageops::rotate180(&small),
@@ -130,7 +138,7 @@ mod mf {
                 };
                 frames.push(small);
             }
-            let (width, height) = if rotation == 90 || rotation == 270 { (h, w) } else { (w, h) };
+            let (width, height) = if rotation == 90 || rotation == 270 { (nh, nw) } else { (nw, nh) };
             Ok(Meta { duration_ms: duration / 10_000, width, height, frames })
         }
     }
@@ -147,24 +155,23 @@ pub fn orientation(w: u32, h: u32) -> &'static str {
     }
 }
 
-fn next(conn: &Connection) -> rusqlite::Result<Option<(i64, PathBuf)>> {
+fn next(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<(i64, PathBuf)>> {
     let deck = db::get_setting(conn, "deck_path")?.unwrap_or_default();
-    conn.query_row(
+    let mut stmt = conn.prepare(
         "SELECT id, deck_path, file_name, status, current_path FROM card
          WHERE stage = 'new' AND status != 'gone' AND (current_path IS NOT NULL OR status != 'placed')
-         ORDER BY (deck_path = ?1 AND status = 'in_deck') DESC, status = 'deferred', position LIMIT 1",
-        params![deck],
-        |r| {
-            let (id, d, name, status, current): (i64, String, String, String, Option<String>) =
-                (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?);
-            let path = match (status.as_str(), current) {
-                ("placed", Some(c)) => PathBuf::from(c),
-                _ => Path::new(&d).join(name),
-            };
-            Ok((id, path))
-        },
-    )
-    .optional()
+         ORDER BY (deck_path = ?1 AND status = 'in_deck') DESC, status = 'deferred', position LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![deck, limit as i64], |r| {
+        let (id, d, name, status, current): (i64, String, String, String, Option<String>) =
+            (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?);
+        let path = match (status.as_str(), current) {
+            ("placed", Some(c)) => PathBuf::from(c),
+            _ => Path::new(&d).join(name),
+        };
+        Ok((id, path))
+    })?;
+    rows.collect()
 }
 
 fn progress(conn: &Connection, paused: bool) -> rusqlite::Result<Progress> {
@@ -176,38 +183,66 @@ fn progress(conn: &Connection, paused: bool) -> rusqlite::Result<Progress> {
     )
 }
 
-fn develop_one(conn: &Connection, cache: &Path, id: i64, path: &Path) -> rusqlite::Result<()> {
+struct Developed {
+    meta: Meta,
+    saved: u32,
+}
+
+fn workers() -> usize {
+    std::thread::available_parallelism().map(|n| n.get() / 2).unwrap_or(2).clamp(2, 4)
+}
+
+fn develop_files(cache: &Path, id: i64, path: &Path) -> Option<Developed> {
     #[cfg(windows)]
-    let result = mf::read(path).map_err(|e| e.message().to_string());
+    let meta = mf::read(path).ok()?;
     #[cfg(not(windows))]
-    let result: Result<Meta, String> = Err("не Windows".into());
-    match result {
-        Ok(meta) if !meta.frames.is_empty() => {
-            let dir = cache.join(id.to_string());
-            let _ = fs::create_dir_all(&dir);
-            let mut saved = 0;
-            for (i, frame) in meta.frames.iter().enumerate() {
-                let file = dir.join(format!("{i}.jpg"));
-                let ok = fs::File::create(&file).ok().and_then(|f| {
-                    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(std::io::BufWriter::new(f), 80);
-                    enc.encode_image(frame).ok()
-                });
-                if ok.is_some() {
-                    saved += 1;
-                }
-            }
-            conn.execute(
-                "UPDATE card SET duration_ms = ?2, width = ?3, height = ?4, orientation = ?5, frames = ?6, stage = 'frames', error = NULL WHERE id = ?1",
-                params![id, meta.duration_ms, meta.width, meta.height, orientation(meta.width, meta.height), saved],
-            )?;
-        }
-        Ok(_) | Err(_) => {
-            conn.execute(
-                "UPDATE card SET stage = 'broken', error = ?2 WHERE id = ?1",
-                params![id, "Не удалось прочитать кадры этого видео — разложить его всё равно можно."],
-            )?;
+    let meta: Meta = return None;
+    if meta.frames.is_empty() {
+        return None;
+    }
+    let dir = cache.join(id.to_string());
+    let _ = fs::create_dir_all(&dir);
+    let mut saved = 0;
+    for (i, frame) in meta.frames.iter().enumerate() {
+        let file = dir.join(format!("{i}.jpg"));
+        let ok = fs::File::create(&file).ok().and_then(|f| {
+            let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(std::io::BufWriter::new(f), 80);
+            enc.encode_image(frame).ok()
+        });
+        if ok.is_some() {
+            saved += 1;
         }
     }
+    Some(Developed { meta, saved })
+}
+
+fn develop_batch(cache: &Path, jobs: &[(i64, PathBuf)]) -> Vec<Option<Developed>> {
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = jobs
+            .iter()
+            .map(|(id, path)| {
+                scope.spawn(move || {
+                    #[cfg(windows)]
+                    mf::start();
+                    develop_files(cache, *id, path)
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().ok().flatten()).collect()
+    })
+}
+
+fn save(conn: &Connection, id: i64, result: Option<Developed>) -> rusqlite::Result<()> {
+    match result {
+        Some(Developed { meta, saved }) => conn.execute(
+            "UPDATE card SET duration_ms = ?2, width = ?3, height = ?4, orientation = ?5, frames = ?6, stage = 'frames', error = NULL WHERE id = ?1",
+            params![id, meta.duration_ms, meta.width, meta.height, orientation(meta.width, meta.height), saved],
+        ),
+        None => conn.execute(
+            "UPDATE card SET stage = 'broken', error = ?2 WHERE id = ?1",
+            params![id, "Не удалось прочитать кадры этого видео — разложить его всё равно можно."],
+        ),
+    }?;
     Ok(())
 }
 
@@ -220,14 +255,16 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<Atomi
         let mut was_busy = false;
         loop {
             let is_paused = paused.load(Ordering::Relaxed);
-            let job = if is_paused { None } else { next(&conn).ok().flatten() };
-            match job {
-                Some((id, path)) => {
+            let jobs = if is_paused { Vec::new() } else { next(&conn, workers()).unwrap_or_default() };
+            match jobs.is_empty() {
+                false => {
                     was_busy = true;
-                    if develop_one(&conn, &cache, id, &path).is_ok() {
-                        if let Ok(cards) = deck::cards(&conn, &[id]) {
-                            let card: Option<&CardView> = cards.first();
-                            let _ = app.emit("develop://card", card);
+                    for ((id, _), result) in jobs.iter().zip(develop_batch(&cache, &jobs)) {
+                        if save(&conn, *id, result).is_ok() {
+                            if let Ok(cards) = deck::cards(&conn, &[*id]) {
+                                let card: Option<&CardView> = cards.first();
+                                let _ = app.emit("develop://card", card);
+                            }
                         }
                     }
                     if last_emit.elapsed() > Duration::from_millis(250) {
@@ -237,7 +274,7 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<Atomi
                         last_emit = Instant::now();
                     }
                 }
-                None => {
+                true => {
                     if was_busy || wake.swap(false, Ordering::Relaxed) {
                         if let Ok(p) = progress(&conn, is_paused) {
                             let _ = app.emit("develop://progress", p);
@@ -266,5 +303,19 @@ mod tests {
         assert!(meta.duration_ms > 0);
         assert_eq!(meta.frames.len(), FRAMES as usize);
         assert!(meta.width > 0 && meta.height > 0);
+    }
+
+    #[test]
+    #[ignore]
+    fn bench_twenty_cards() {
+        let Ok(dir) = fs::read_dir(r"G:\sorter-test\deck") else { return };
+        let jobs: Vec<_> = dir.filter_map(|e| e.ok().map(|e| e.path())).take(20).enumerate().map(|(i, p)| (i as i64, p)).collect();
+        let cache = std::env::temp_dir().join("sorter-bench");
+        let total = Instant::now();
+        let mut ok = 0;
+        for chunk in jobs.chunks(workers()) {
+            ok += develop_batch(&cache, chunk).iter().filter(|r| r.is_some()).count();
+        }
+        println!("ИТОГО {ok}/{} карт, {} потока: {} ms", jobs.len(), workers(), total.elapsed().as_millis());
     }
 }
