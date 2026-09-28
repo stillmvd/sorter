@@ -1,6 +1,6 @@
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { FolderOpen, LayoutGrid, Layers, Plus } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { errorText, ipc, onCard, onDeckChanged, onPilesChanged, onProgress, type AppState, type Card, type Method, type Move, type Pile } from "../../lib/ipc";
 import { isTypingChar, keyOf } from "../../lib/keys";
 import { cardsWord } from "../../lib/plural";
@@ -66,7 +66,6 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
   }, []);
   const pending = useRef(new Set<number>());
   const search = useRef<HTMLInputElement>(null);
-  const center = useRef<HTMLDivElement>(null);
   const cardsRef = useRef(cards);
   cardsRef.current = cards;
   const sheetRef = useRef(sheet);
@@ -128,12 +127,16 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
     return () => window.clearTimeout(t);
   }, [toast]);
 
-  useLayoutEffect(() => {
-    const el = center.current;
+  const centerObserver = useRef<ResizeObserver | null>(null);
+  const center = useCallback((el: HTMLDivElement | null) => {
+    centerObserver.current?.disconnect();
+    centerObserver.current = null;
     if (!el) return;
-    const ro = new ResizeObserver(([entry]) => setZone(Math.max(240, Math.min(entry.contentRect.height, 560))));
+    const ro = new ResizeObserver(([entry]) => {
+      if (entry.contentRect.height > 0) setZone(Math.max(240, Math.min(entry.contentRect.height, 560)));
+    });
     ro.observe(el);
-    return () => ro.disconnect();
+    centerObserver.current = ro;
   }, []);
 
   const matches = useMemo(() => rank(piles, query), [piles, query]);
