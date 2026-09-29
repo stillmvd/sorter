@@ -77,7 +77,7 @@ function Face({
     const v = ref.current;
     const timer = window.setTimeout(() => {
       if (v && v.readyState < 2 && fixing.current !== "busy") brokenRef.current();
-    }, 1500);
+    }, 5000);
     return () => window.clearTimeout(timer);
   }, [active, src]);
 

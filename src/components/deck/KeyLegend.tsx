@@ -1,3 +1,5 @@
+import { Keyboard } from "lucide-react";
+
 function Cap({ children }: { children: string }) {
   return (
     <kbd className="inline-grid h-[22px] min-w-[22px] place-items-center rounded-md border-b-2 border-line bg-raised px-1.5 font-sans text-[11px] leading-none font-bold text-fg">
@@ -43,6 +45,25 @@ export function KeyLegend({ muted, dupe = false }: { muted: boolean; dupe?: bool
           <span>{r.label === "звук" ? (muted ? "включить звук" : "выключить звук") : r.label}</span>
         </div>
       ))}
+    </div>
+  );
+}
+
+export function KeysHint({ muted, dupe = false }: { muted: boolean; dupe?: boolean }) {
+  return (
+    <div className="group relative">
+      <button
+        type="button"
+        aria-label="Горячие клавиши"
+        className="grid h-9 w-9 place-items-center rounded-full bg-raised text-dim transition-colors duration-200 ease-trail hover:bg-strong hover:text-fg focus-visible:text-fg"
+      >
+        <Keyboard size={16} strokeWidth={1.5} />
+      </button>
+      <div className="pointer-events-none invisible absolute right-0 bottom-full z-30 pb-3 opacity-0 transition-[opacity,translate,visibility] duration-200 ease-trail translate-y-1 group-hover:pointer-events-auto group-hover:visible group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:visible group-focus-within:opacity-100 group-focus-within:translate-y-0">
+        <div className="w-max rounded-[20px] border border-line bg-cosmic p-4 shadow-[0_20px_50px_rgb(0_0_0/35%)]">
+          <KeyLegend muted={muted} dupe={dupe} />
+        </div>
+      </div>
     </div>
   );
 }

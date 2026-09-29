@@ -14,7 +14,7 @@ import { play } from "../../lib/sound";
 import { pressToDrag } from "../fx/Drag";
 import { Flights, motionOff, pileElement, shake, snapshot, type Flight } from "../fx/Flight";
 import { FilmStrip, seekFrame } from "./FilmStrip";
-import { KeyLegend } from "./KeyLegend";
+import { KeysHint } from "./KeyLegend";
 import { PileMenu } from "./PileMenu";
 import { VolumeRow } from "./VolumeRow";
 import { Button } from "../ui/Button";
@@ -772,7 +772,7 @@ export function DeckScreen({
               ) : (
                 <HintBox hints={hints} piles={piles} onPlace={(p) => put(p, "hint")} />
               )}
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {!dupe && (
                   <Button onClick={defer} hotkey="Tab" disabled={cards.length < 2}>
                     В конец колоды
@@ -786,7 +786,6 @@ export function DeckScreen({
                 <div className="flex-1" />
                 <VolumeRow muted={muted} volume={volume} onMute={toggleMute} onVolume={changeVolume} />
               </div>
-              <KeyLegend muted={muted} dupe={!!dupe} />
             </div>
           )}
         </div>
@@ -840,6 +839,7 @@ export function DeckScreen({
           Новая стопка
         </Button>
         )}
+        {mode === "deck" && <KeysHint muted={muted} dupe={!!dupe} />}
       </div>
       {piles.filter((p) => !p.isTrash).length === 0 && (
         <p className="m-0 -mb-2 text-[13px] text-dim">Стопок пока нет. Напечатай название и нажми Shift Enter — создашь первую.</p>
