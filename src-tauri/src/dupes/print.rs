@@ -231,7 +231,7 @@ pub mod mf {
     const EOS: u32 = MF_SOURCE_READERF_ENDOFSTREAM.0 as u32;
 
     thread_local! {
-        static DEVICE: Option<ID3D11Device> = device().ok();
+        static DEVICE: std::mem::ManuallyDrop<Option<ID3D11Device>> = std::mem::ManuallyDrop::new(device().ok());
     }
 
     fn device() -> windows::core::Result<ID3D11Device> {
@@ -348,6 +348,7 @@ pub mod mf {
             let (mut next, mut next_still) = (0i64, 0i64);
             let (mut grays, mut stills) = (Vec::new(), Vec::new());
             let mut empty = 0;
+            let mut start = None;
             loop {
                 let (mut flags, mut ts, mut sample) = (0u32, 0i64, None);
                 reader.ReadSample(VIDEO, 0, None, Some(&mut flags), Some(&mut ts), Some(&mut sample))?;
@@ -362,6 +363,7 @@ pub mod mf {
                     continue;
                 };
                 empty = 0;
+                let ts = ts - *start.get_or_insert(ts);
                 if ts < next && ts < next_still {
                     continue;
                 }
@@ -519,3 +521,4 @@ mod bench {
         println!("ИТОГО {spent} ms на {} с видео → {:.2} с на минуту", video_ms / 1000, spent as f64 / 1000.0 / (video_ms as f64 / 60_000.0));
     }
 }
+
