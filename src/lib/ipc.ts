@@ -144,6 +144,7 @@ export const ipc = {
   undoMove: (moveId: number) => invoke<{ move: Move | null; cards: Card[]; piles: Pile[] }>("undo_move", { moveId }),
   undoSince: (since: number) => invoke<{ undone: number; failed: string[] }>("undo_since", { since }),
   journal: (before: number | null, limit: number) => invoke<Move[]>("journal", { before, limit }),
+  journalStats: () => invoke<{ moves: number; cards: number; hinted: number }>("journal_stats"),
   createPile: (name: string) => invoke<Pile[]>("create_pile", { name }),
   renamePile: (pileId: number, name: string) => invoke<Pile[]>("rename_pile", { pileId, name }),
   setPileKey: (pileId: number, key: string | null) => invoke<Pile[]>("set_pile_key", { pileId, key }),

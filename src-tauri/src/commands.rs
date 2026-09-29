@@ -269,6 +269,29 @@ pub fn journal(state: State<AppState>, before: Option<i64>, limit: i64) -> AppRe
     ids.into_iter().map(|id| moves::load_move(&conn, id)).collect()
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JournalStats {
+    moves: i64,
+    cards: i64,
+    hinted: i64,
+}
+
+#[tauri::command]
+pub fn journal_stats(state: State<AppState>) -> AppResult<JournalStats> {
+    let conn = state.conn();
+    let (moves, cards, hinted) = conn.query_row(
+        "SELECT COUNT(DISTINCT m.id),
+                COUNT(i.card_id),
+                COUNT(CASE WHEN m.method = 'hint' THEN i.card_id END)
+         FROM move m LEFT JOIN move_item i ON i.move_id = m.id
+         WHERE m.state = 'done'",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    Ok(JournalStats { moves, cards, hinted })
+}
+
 #[tauri::command]
 pub fn create_pile(state: State<AppState>, name: String) -> AppResult<Vec<PileView>> {
     let conn = state.conn();

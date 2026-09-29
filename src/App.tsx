@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Titlebar } from "./components/Titlebar";
 import { DeckScreen } from "./components/deck/DeckScreen";
 import { Develop } from "./components/screens/Develop";
+import { JournalScreen } from "./components/screens/Journal";
 import { PilesScreen } from "./components/screens/Piles";
 import { Start } from "./components/screens/Start";
 import { errorText, ipc, type AppState } from "./lib/ipc";
@@ -11,7 +12,7 @@ export default function App() {
   const [failure, setFailure] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
   const [developView, setDevelopView] = useState(false);
-  const [pilesView, setPilesView] = useState(false);
+  const [screen, setScreen] = useState<"deck" | "piles" | "journal">("deck");
 
   const reload = useCallback(async () => {
     try {
@@ -30,6 +31,8 @@ export default function App() {
     if (theme === "dark" || theme === "light") document.documentElement.dataset.theme = theme;
     else delete document.documentElement.dataset.theme;
   }, [state?.settings.theme]);
+
+  const back = useCallback(() => void reload().then(() => setScreen("deck")), [reload]);
 
   const ready = !!state?.settings.deck_path && !!state?.settings.table_path;
   const showStart = state && (!ready || (!started && !state.settings.mode));
@@ -51,11 +54,14 @@ export default function App() {
         />
       )}
       {state && !showStart && ready && developView && <Develop state={state} onDone={() => setDevelopView(false)} />}
-      {state && !showStart && ready && !developView && pilesView && (
-        <PilesScreen table={state.settings.table_path ?? ""} onBack={() => void reload().then(() => setPilesView(false))} />
+      {state && !showStart && ready && !developView && screen === "piles" && (
+        <PilesScreen table={state.settings.table_path ?? ""} onBack={back} />
       )}
-      {state && !showStart && ready && !developView && !pilesView && (
-        <DeckScreen initial={state} onReload={reload} onPiles={() => setPilesView(true)} />
+      {state && !showStart && ready && !developView && screen === "journal" && (
+        <JournalScreen cacheDir={state.cacheDir} deckPath={state.settings.deck_path ?? ""} onBack={back} />
+      )}
+      {state && !showStart && ready && !developView && screen === "deck" && (
+        <DeckScreen initial={state} onPiles={() => setScreen("piles")} onJournal={() => setScreen("journal")} />
       )}
     </div>
   );

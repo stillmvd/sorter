@@ -1,5 +1,5 @@
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Copy, Folder, FolderOpen, LayoutGrid, Layers, Plus } from "lucide-react";
+import { Copy, Folder, FolderOpen, History, LayoutGrid, Layers, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { errorText, ipc, onCard, onDeckChanged, onDupesChanged, onPilesChanged, onProgress, type AppState, type Card, type DupeGroup, type DupeGroups, type DupeView, type GroupItem, type Method, type Move, type Pile } from "../../lib/ipc";
 import { isTypingChar, keyOf } from "../../lib/keys";
@@ -7,7 +7,7 @@ import { cardsWord, plural } from "../../lib/plural";
 import { useHints } from "../../lib/useHints";
 import { useDupes } from "../../lib/useDupes";
 import { HintBox } from "./HintBox";
-import { Mark } from "../ui/Mark";
+import { Done } from "../screens/Done";
 import { IconButton } from "../ui/IconButton";
 import { DupeBadge } from "./DupeBadge";
 import { play } from "../../lib/sound";
@@ -18,7 +18,7 @@ import { KeyLegend } from "./KeyLegend";
 import { PileMenu } from "./PileMenu";
 import { VolumeRow } from "./VolumeRow";
 import { Button } from "../ui/Button";
-import { Heading, PageHeader, Tag } from "../ui/PageHeader";
+import { PageHeader, Tag } from "../ui/PageHeader";
 import { SearchField } from "../ui/SearchField";
 import { CardStack } from "./Card";
 import { LastMove, LastMoveLine } from "./LastMove";
@@ -49,7 +49,15 @@ function rank(piles: Pile[], query: string) {
     .sort((a, b) => Number(!a.name.toLowerCase().startsWith(q)) - Number(!b.name.toLowerCase().startsWith(q)));
 }
 
-export function DeckScreen({ initial, onReload, onPiles }: { initial: AppState; onReload: () => void; onPiles: () => void }) {
+export function DeckScreen({
+  initial,
+  onPiles,
+  onJournal,
+}: {
+  initial: AppState;
+  onPiles: () => void;
+  onJournal: () => void;
+}) {
   const [cards, setCards] = useState<Card[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [piles, setPiles] = useState(initial.piles);
@@ -525,6 +533,11 @@ export function DeckScreen({ initial, onReload, onPiles }: { initial: AppState; 
       onPiles();
       return;
     }
+    if (e.ctrlKey && e.code === "KeyJ") {
+      e.preventDefault();
+      onJournal();
+      return;
+    }
     if (mode === "dupes") return;
     if (e.ctrlKey && e.code === "KeyE") {
       e.preventDefault();
@@ -623,6 +636,20 @@ export function DeckScreen({ initial, onReload, onPiles }: { initial: AppState; 
   const picked = sheet.reduce((n, c) => n + Number(selected.has(c.id)), 0);
   const sure = groups?.groups.filter((g) => g.confidence >= SURE).length ?? 0;
 
+  if (empty && mode !== "dupes")
+    return (
+      <main className="mx-2 mb-2 flex min-h-0 flex-1 flex-col rounded-[28px] bg-cosmic px-10 py-7">
+        <Done
+          placed={counts.placed}
+          piles={piles}
+          deckPath={initial.settings.deck_path ?? ""}
+          tablePath={initial.settings.table_path ?? ""}
+          hintsOn={initial.settings.hints_enabled !== "0"}
+          onJournal={onJournal}
+        />
+      </main>
+    );
+
   return (
     <main
       className="relative mx-2 mb-2 flex min-h-0 flex-1 flex-col gap-[18px] rounded-[28px] bg-cosmic px-10 py-7"
@@ -658,6 +685,9 @@ export function DeckScreen({ initial, onReload, onPiles }: { initial: AppState; 
         actions={
           <>
             <Segment label="Режим" options={modes(sure)} value={mode} onChange={switchMode} />
+            <IconButton label="Журнал" hint="Журнал ходов — Ctrl J" onClick={onJournal}>
+              <History size={18} strokeWidth={1.5} />
+            </IconButton>
             <IconButton label="Стопки" hint="Стопки и клавиши — Ctrl K" onClick={onPiles}>
               <Folder size={18} strokeWidth={1.5} />
             </IconButton>
@@ -674,15 +704,6 @@ export function DeckScreen({ initial, onReload, onPiles }: { initial: AppState; 
           onDismiss={(g) => void dismissGroup(g)}
           onTrashExact={(paths) => void trashPaths(paths)}
         />
-      ) : empty ? (
-        <div className="flex min-h-0 flex-1 flex-col items-start justify-center gap-4">
-          <Mark size={72} />
-          <Heading light="Колода" bold="пуста" size={56} />
-          <p className="m-0 max-w-[60ch] text-[15px] leading-[1.55] text-dim">
-            Все видео лежат по стопкам. Новые видео из папки колоды появятся здесь при следующем запуске.
-          </p>
-          <Button onClick={onReload}>Проверить папку ещё раз</Button>
-        </div>
       ) : mode === "table" ? (
         <ContactSheet
           cards={sheet}
