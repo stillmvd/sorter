@@ -18,3 +18,4 @@ brand/logo/png/
 brand/concepts/__pycache__/
 brand/concepts/*-sheet.*
 brand/concepts/logo-page.html
+brand/**/__pycache__/

@@ -9,6 +9,7 @@ mod media;
 mod moves;
 mod piles;
 mod playable;
+mod taskbar_icon;
 mod watch;
 
 use commands::AppState;
@@ -44,6 +45,13 @@ pub fn run() {
             watch::spawn(app.handle().clone(), data_dir.join("sorter.db"), wake.clone());
             app.manage(AppState { db: Mutex::new(conn), data_dir, paused, wake });
             if let Some(window) = app.get_webview_window("main") {
+                taskbar_icon::apply(&window);
+                let target = window.clone();
+                window.on_window_event(move |event| {
+                    if matches!(event, tauri::WindowEvent::ThemeChanged(_) | tauri::WindowEvent::Focused(true)) {
+                        taskbar_icon::apply(&target);
+                    }
+                });
                 let _ = window.show();
             }
             Ok(())

@@ -21,7 +21,8 @@ INK = "#17171a"
 PAPER = "#f4f4f6"
 DARK = "#141416"
 W, H, R, D, GAP = 24, 30, 3.5, 5.5, 2.2
-HOLES, PLAY = 4, 9
+HOLES, PLAY = 3, 9
+SMALL_MAX = 48
 FRACTION = .66
 ICO_SIZES = [24, 30, 32, 36, 40, 48, 60, 64, 72, 96, 128, 256]
 
@@ -39,7 +40,7 @@ def play(cx, cy, h):
 def glyph():
     m = 3
     step = (H - 2 * m) / HOLES
-    hh, hw = step * .55, 3
+    hh, hw = step * .55, 3.4
     holes = [rrect(side, m + step * k + (step - hh) / 2, hw, hh, .8)
              for side in (1.8, W - 1.8 - hw) for k in range(HOLES)]
     front = rrect(0, 0, W, H, R).difference(unary_union(holes + [play(W / 2, H / 2, PLAY)]))
@@ -71,6 +72,20 @@ def path_d(geom):
 def svg(inner, view="0 0 64 64", size=None):
     dims = f' width="{size}" height="{size}"' if size else ""
     return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{view}"{dims}>{inner}</svg>\n'
+
+
+def small(bar):
+    geom = fit(glyph(), 58)
+    silhouette = unary_union([Polygon(p.exterior) for p in getattr(geom, "geoms", [geom])])
+    plate = PAPER if bar == "dark" else INK
+    return (f'<circle cx="32" cy="32" r="29" fill="{plate}"/>'
+            f'<path d="{path_d(silhouette)}" fill="{INK}" stroke="{INK}" stroke-width="3.5" stroke-linejoin="round"/>'
+            f'<path d="{path_d(geom)}" fill="{PAPER}" fill-rule="evenodd"/>')
+
+
+def export(src, out, px):
+    subprocess.run([INKSCAPE, str(src), f"--actions=export-filename:{out};export-width:{px};export-height:{px};export-do"],
+                   check=True, capture_output=True)
 
 
 def wordmark(height):
@@ -105,12 +120,14 @@ def main():
         (ROOT / name).write_text(svg(inner, view=f"0 0 {total:.1f} 64"), encoding="utf-8")
     (PROJECT / "src/components/ui/markPath.ts").write_text(f'export const MARK_PATH = "{mono}";\n', encoding="utf-8")
 
+    for bar in ("dark", "light"):
+        (ROOT / f"mark-small-{bar}.svg").write_text(svg(small(bar)), encoding="utf-8")
     tmp = ROOT / "png"
     tmp.mkdir(exist_ok=True)
     for px in sorted(set(ICO_SIZES + [32, 128, 256])):
-        subprocess.run([INKSCAPE, str(ROOT / "mark.svg"),
-                        f"--actions=export-filename:{tmp / f'{px}.png'};export-width:{px};export-height:{px};export-do"],
-                       check=True, capture_output=True)
+        export(ROOT / ("mark-small-dark.svg" if px <= SMALL_MAX else "mark.svg"), tmp / f"{px}.png", px)
+    for bar in ("dark", "light"):
+        export(ROOT / f"mark-small-{bar}.svg", ICONS / f"taskbar-{bar}.png", 48)
     for name, px in (("32x32.png", 32), ("128x128.png", 128), ("128x128@2x.png", 256)):
         (ICONS / name).write_bytes((tmp / f"{px}.png").read_bytes())
     images = [Image.open(tmp / f"{px}.png").convert("RGBA") for px in ICO_SIZES]

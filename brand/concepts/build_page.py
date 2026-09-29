@@ -8,7 +8,7 @@ ROOT = pathlib.Path(__file__).resolve().parent
 PROJECT = ROOT.parent.parent
 FONTS = PROJECT / "src/fonts"
 OUT = ROOT / "logo-page.html"
-WAVES = ["wave1", "wave2", "wave3", "wave4"]
+WAVES = ["wave1", "wave2", "wave3", "wave4", "wave5"]
 INKSCAPE = "C:/Program Files/Inkscape/bin/inkscape.com"
 
 sys.path.insert(0, str(ROOT))
@@ -89,6 +89,14 @@ h3{margin:0;font-size:12px;font-weight:500;letter-spacing:.08em;text-transform:u
   background:var(--accent);color:var(--accent-ink);white-space:nowrap}
 .bar button:disabled{background:var(--line);color:var(--dim);cursor:default}
 .bar button:focus-visible{outline:2px solid var(--fg);outline-offset:2px}
+.tile.bar-dark{background:#202020;border-color:#2e2e33}
+.tile.bar-dark .size{color:#8a8a92}
+.tile.bar-light{background:#eeeef0}
+details.wave>summary{cursor:pointer;list-style:none;display:grid;gap:6px}
+details.wave>summary::-webkit-details-marker{display:none}
+details.wave>summary h2::after{content:" ▸";color:var(--dim)}
+details.wave[open]>summary h2::after{content:" ▾"}
+details.wave:not([open]){gap:0}
 @media (max-width:560px){.wave{padding:18px;border-radius:22px}.bar{border-radius:22px;padding-left:16px}}
 @media (prefers-reduced-motion:reduce){.tile{transition:none}}
 """.replace("__CHECK__", CHECK)
@@ -137,7 +145,8 @@ def tile(mod, uid, spec, interactive, chosen, radio=None, idx=0):
     default = bool(rest and rest[0])
     sizes = "".join(f'<span class="size">{svg(mod.variant_svg(f"{uid}-{px}", key, in_circle), size=px)}{px}</span>'
                     for px in (48, 32, 24, 16))
-    body = (f'<span class="tile">{svg(mod.variant_svg(f"{uid}-big", key, in_circle), "big")}'
+    surface = mod.surface(key) if hasattr(mod, "surface") else ""
+    body = (f'<span class="tile{surface}">{svg(mod.variant_svg(f"{uid}-big", key, in_circle), "big")}'
             f'<span class="sizes">{sizes}</span></span>')
     cap = f'<span class="tile-cap">{caption}</span>' if caption else ""
     if interactive:
@@ -192,6 +201,9 @@ def wave_section(mod, interactive):
         head += f'<p class="chosen">Выбрано: <b>{" · ".join(chosen)}</b></p>'
     attrs = f' data-active data-label="Волна {mod.NUMBER}"' if interactive else ""
     build = mod.preview() if interactive and hasattr(mod, "preview") else ""
+    if not interactive:
+        return (f'<details class="wave closed"><summary><h2>{mod.TITLE}</h2>'
+                f'<p class="chosen">Выбрано: <b>{" · ".join(chosen)}</b></p></summary>{"".join(groups)}</details>')
     return (f'<section class="wave"{attrs}><div class="wave-head">{head}</div>{build}{"".join(groups)}'
             f'<p class="summary">{mod.SUMMARY}</p></section>')
 
@@ -215,7 +227,8 @@ def final_section():
     if not (LOGO / "mark.svg").exists():
         return ""
     symbols = "".join(f'<symbol id="final-{key}" viewBox="{logo_inner(name)[0]}">{logo_inner(name)[1]}</symbol>'
-                      for key, name in (("mark", "mark.svg"), ("mono", "mark-mono.svg")))
+                      for key, name in (("mark", "mark.svg"), ("mono", "mark-mono.svg"),
+                                        ("sdark", "mark-small-dark.svg"), ("slight", "mark-small-light.svg")))
 
     def use(key, size=None, cls=""):
         attrs = (f' width="{size}" height="{size}"' if size else "") + (f' class="{cls}"' if cls else "")
@@ -226,6 +239,8 @@ def final_section():
 
     marks = "".join(f'<div class="build-tile {theme}">{use(key, cls="big")}<span class="sizes">{sizes(key)}</span></div>'
                     for theme, key in (("light", "mark"), ("dark", "mark"), ("light", "mono"), ("dark", "mono")))
+    bars = "".join(f'<div class="tile bar-{bar}">{use(key, cls="big")}<span class="sizes">{sizes(key)}</span></div>'
+                   for bar, key in (("dark", "sdark"), ("light", "slight")))
     lockups = "".join(
         f'<div class="build-tile {theme}"><svg viewBox="{view}" class="lockup" role="img" aria-label="Sorter">{body}</svg></div>'
         for theme, (view, body) in (("light", logo_inner("lockup.svg")), ("dark", logo_inner("lockup-on-dark.svg"))))
@@ -236,14 +251,15 @@ def final_section():
         f'<div class="s-scene {theme}"><div class="s-title">{use("mono", 16)}<span>Sorter — G:&#92;vk videos</span>'
         f'<span class="s-dots">— ▢ ✕</span></div><div class="s-empty">{use("mono", 72)}'
         f'<b>Колода пуста</b><span>Все видео лежат по стопкам</span></div>'
-        f'<div class="s-taskbar"><i></i><i></i><span class="s-on">{use("mark", 24)}</span><i></i></div></div>'
+        f'<div class="s-taskbar"><i></i><i></i><span class="s-on">{use("sdark", 24)}</span><i></i></div></div>'
         for theme in ("light", "dark"))
     return (f'<section class="wave final"><div class="wave-head"><h2>Готовый знак</h2>'
-            f'<p class="prompt">B2c — колода из трёх карт, передняя с перфорацией и «play». В круге — иконка '
-            f'приложения, доля 66 %; без подложки — шапка окна и пустые экраны, на всё поле. Геометрия — '
+            f'<p class="prompt">B2c — колода из трёх карт, передняя с перфорацией по три дырочки и «play». В круге — иконка '
+            f'приложения, доля 66 %, от 64 px; до 48 px — колода шире круга, круг по теме панели; без подложки — шапка окна и пустые экраны, на всё поле. Геометрия — '
             f'brand/logo/generate.py, он же пишет иконки, .ico и путь для компонента Mark.</p></div>'
             f'<svg width="0" height="0" style="position:absolute" aria-hidden="true">{symbols}</svg>'
             f'<div class="build"><h3>Знак</h3><div class="build-row">{marks}</div></div>'
+            f'<div class="build"><h3>Панель задач, 48 px и меньше — круг по теме</h3><div class="build-row">{bars}</div></div>'
             f'<div class="build"><h3>Локап</h3><div class="build-row">{lockups}</div></div>'
             f'<div class="build"><h3>Иконки приложения</h3><div class="build-row">{icon_row}</div></div>'
             f'<div class="build"><h3>В Windows</h3><div class="s-scenes">{scenes}</div></div></section>')
