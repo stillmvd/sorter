@@ -28,6 +28,7 @@ struct Progress {
     done: i64,
     total: i64,
     paused: bool,
+    printed: i64,
 }
 
 #[cfg(windows)]
@@ -179,10 +180,11 @@ fn next(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<(i64, PathBuf)>
 
 fn progress(conn: &Connection, paused: bool) -> rusqlite::Result<Progress> {
     let deck = db::get_setting(conn, "deck_path")?.unwrap_or_default();
+    let printed = conn.query_row("SELECT COUNT(*) FROM fingerprint WHERE state != 'new'", [], |r| r.get(0))?;
     conn.query_row(
         "SELECT SUM(stage != 'new'), COUNT(*) FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred')",
         params![deck],
-        |r| Ok(Progress { done: r.get::<_, Option<i64>>(0)?.unwrap_or(0), total: r.get(1)?, paused }),
+        |r| Ok(Progress { done: r.get::<_, Option<i64>>(0)?.unwrap_or(0), total: r.get(1)?, paused, printed }),
     )
 }
 
@@ -262,6 +264,22 @@ impl Learner {
         Learner { engine: None, failed: false, cold: Vec::new(), cold_at: None, skip: HashSet::new() }
     }
 
+    fn engine(&mut self, cache: &Path) -> Option<&mut Engine> {
+        if self.engine.is_none() && !self.failed {
+            match Engine::load(&cache.parent().unwrap_or(cache).join("runtime")) {
+                Ok(e) => {
+                    eprintln!("hints: движок на {}", e.device);
+                    self.engine = Some(e);
+                }
+                Err(e) => {
+                    eprintln!("hints: {e}");
+                    self.failed = true;
+                }
+            }
+        }
+        self.engine.as_mut()
+    }
+
     fn step(&mut self, app: &AppHandle, conn: &Connection, cache: &Path) -> bool {
         if self.failed || !hints::enabled(conn) {
             return false;
@@ -281,20 +299,7 @@ impl Learner {
         if ids.is_empty() && cold.is_none() {
             return false;
         }
-        if self.engine.is_none() {
-            match Engine::load(&cache.parent().unwrap_or(cache).join("runtime")) {
-                Ok(e) => {
-                    eprintln!("hints: движок на {}", e.device);
-                    self.engine = Some(e);
-                }
-                Err(e) => {
-                    eprintln!("hints: {e}");
-                    self.failed = true;
-                    return false;
-                }
-            }
-        }
-        let engine = self.engine.as_mut().unwrap();
+        let Some(engine) = self.engine(cache) else { return false };
         for id in &ids {
             let frames = hints::card_frames(cache, *id);
             let vector = engine.embed(&frames).ok().and_then(|vs| hints::mean(&vs));
@@ -381,6 +386,7 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<Atomi
         let mut last_emit = Instant::now() - Duration::from_secs(1);
         let mut was_busy = false;
         let mut learner = Learner::new();
+        let mut printer = dupes::near::Printer::new();
         let mut dupes_at = Instant::now() - Duration::from_secs(60);
         loop {
             let is_paused = paused.load(Ordering::Relaxed);
@@ -416,6 +422,21 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<Atomi
                 true => {
                     if !is_paused && learner.step(&app, &conn, &cache) {
                         continue;
+                    }
+                    if !is_paused {
+                        match printer.step(&conn, learner.engine(&cache)) {
+                            Ok(Some(changed)) => {
+                                if changed {
+                                    let _ = app.emit("dupes://changed", ());
+                                }
+                                if let Ok(p) = progress(&conn, false) {
+                                    let _ = app.emit("develop://progress", p);
+                                }
+                                continue;
+                            }
+                            Ok(None) => {}
+                            Err(e) => eprintln!("dupes: {e}"),
+                        }
                     }
                     if was_busy || wake.swap(false, Ordering::Relaxed) {
                         if let Ok(p) = progress(&conn, is_paused) {

@@ -74,7 +74,7 @@ export type DupeView = {
 
 export type Settings = Partial<Record<"deck_path" | "table_path" | "hints_enabled" | "theme" | "muted" | "mode" | "volume", string>>;
 
-export type Developing = { done: number; total: number; paused: boolean };
+export type Developing = { done: number; total: number; paused: boolean; printed: number };
 
 export type AppState = {
   cacheDir: string;

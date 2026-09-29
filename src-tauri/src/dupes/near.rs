@@ -270,4 +270,38 @@ mod probe {
             }
         }
     }
+
+    #[test]
+    #[ignore]
+    fn real_library() {
+        unsafe {
+            let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED);
+            let _ = windows::Win32::Media::MediaFoundation::MFStartup(
+                windows::Win32::Media::MediaFoundation::MF_VERSION,
+                windows::Win32::Media::MediaFoundation::MFSTARTUP_FULL,
+            );
+        }
+        let conn = Connection::open(std::env::var("SORTER_DB").unwrap()).unwrap();
+        crate::db::init(&conn).unwrap();
+        let runtime = std::env::var("APPDATA").map(|a| Path::new(&a).join("com.stillmvd.sorter").join("runtime")).unwrap();
+        let mut engine = Engine::load(&runtime).ok();
+        let mut printer = Printer::new();
+        let t = std::time::Instant::now();
+        let mut n = 0;
+        while let Some(changed) = printer.step(&conn, engine.as_mut()).unwrap() {
+            n += 1;
+            if changed || n % 20 == 0 {
+                println!("{n} {:?} {changed}", t.elapsed());
+            }
+        }
+        super::super::refresh_exact(&conn).unwrap();
+        let mut q = conn.prepare("SELECT a, b, kind, confidence, visual, audio, semantic FROM dupe ORDER BY kind, confidence DESC").unwrap();
+        let rows = q
+            .query_map([], |r| Ok(format!("{} | {} | {} {} v{:.2} a{:.2} s{:.2}", r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?, r.get::<_, f64>(4).unwrap_or(0.0), r.get::<_, f64>(5).unwrap_or(0.0), r.get::<_, f64>(6).unwrap_or(0.0))))
+            .unwrap();
+        for r in rows {
+            println!("PAIR {}", r.unwrap());
+        }
+        println!("ИТОГО {n} файлов за {:?}", t.elapsed());
+    }
 }
