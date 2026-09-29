@@ -52,10 +52,11 @@ export function KeyLegend({ muted, dupe = false }: { muted: boolean; dupe?: bool
 export function KeysHint({ muted, dupe = false }: { muted: boolean; dupe?: boolean }) {
   return (
     <div className="group relative">
+      <div className="pointer-events-none fixed inset-0 z-20 bg-ground/30 opacity-0 backdrop-blur-md transition-opacity duration-200 ease-trail group-focus-within:opacity-100 group-hover:opacity-100" />
       <button
         type="button"
         aria-label="Горячие клавиши"
-        className="grid h-9 w-9 place-items-center rounded-full bg-raised text-dim transition-colors duration-200 ease-trail hover:bg-strong hover:text-fg focus-visible:text-fg"
+        className="relative z-30 grid h-9 w-9 place-items-center rounded-full bg-raised text-dim transition-colors duration-200 ease-trail hover:bg-strong hover:text-fg focus-visible:text-fg"
       >
         <Keyboard size={16} strokeWidth={1.5} />
       </button>
