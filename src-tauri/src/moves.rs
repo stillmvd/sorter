@@ -19,7 +19,7 @@ const RESERVED: [&str; 22] = [
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MoveItemView {
-    pub card_id: i64,
+    pub card_id: Option<i64>,
     pub file_name: String,
     pub final_name: Option<String>,
     pub from_path: String,
@@ -48,7 +48,8 @@ struct PileRow {
 }
 
 struct Item {
-    card_id: i64,
+    id: i64,
+    card_id: Option<i64>,
     from: PathBuf,
     to: Option<PathBuf>,
     step: String,
@@ -188,11 +189,8 @@ fn load_pile(conn: &Connection, pile_id: i64) -> AppResult<PileRow> {
     .ok_or_else(|| AppError::new("PILE_GONE", "Такой стопки больше нет."))
 }
 
-fn set_step(conn: &Connection, move_id: i64, card_id: i64, step: &str) -> AppResult<()> {
-    conn.execute(
-        "UPDATE move_item SET step = ?3 WHERE move_id = ?1 AND card_id = ?2",
-        params![move_id, card_id, step],
-    )?;
+fn set_step(conn: &Connection, item_id: i64, step: &str) -> AppResult<()> {
+    conn.execute("UPDATE move_item SET step = ?2 WHERE id = ?1", params![item_id, step])?;
     Ok(())
 }
 
@@ -203,14 +201,15 @@ fn set_state(conn: &Connection, move_id: i64, state: &str, error: Option<&str>) 
 
 fn load_items(conn: &Connection, move_id: i64) -> AppResult<Vec<Item>> {
     let mut st = conn.prepare(
-        "SELECT card_id, from_path, to_path, step FROM move_item WHERE move_id = ?1 ORDER BY rowid",
+        "SELECT id, card_id, from_path, to_path, step FROM move_item WHERE move_id = ?1 ORDER BY id",
     )?;
     let rows = st.query_map(params![move_id], |r| {
         Ok(Item {
-            card_id: r.get(0)?,
-            from: PathBuf::from(r.get::<_, String>(1)?),
-            to: r.get::<_, Option<String>>(2)?.map(PathBuf::from),
-            step: r.get(3)?,
+            id: r.get(0)?,
+            card_id: r.get(1)?,
+            from: PathBuf::from(r.get::<_, String>(2)?),
+            to: r.get::<_, Option<String>>(3)?.map(PathBuf::from),
+            step: r.get(4)?,
         })
     })?;
     Ok(rows.collect::<Result<_, _>>()?)
@@ -268,7 +267,19 @@ pub fn place_with(
     method: &str,
     rename: RenameFn,
 ) -> AppResult<MoveView> {
-    if card_ids.is_empty() {
+    move_with(conn, card_ids, &[], pile_id, method, None, rename)
+}
+
+pub fn move_with(
+    conn: &mut Connection,
+    card_ids: &[i64],
+    paths: &[PathBuf],
+    pile_id: i64,
+    method: &str,
+    group: Option<i64>,
+    rename: RenameFn,
+) -> AppResult<MoveView> {
+    if card_ids.is_empty() && paths.is_empty() {
         return Err(AppError::new("NOTHING", "Нечего раскладывать — отметь хотя бы одну карту."));
     }
     let pile = load_pile(conn, pile_id)?;
@@ -297,16 +308,29 @@ pub fn place_with(
             taken.push(name.clone());
             Some(dir.join(name))
         };
-        items.push(Item { card_id, from: Path::new(&deck_path).join(&file_name), to, step: "planned".into() });
+        items.push(Item { id: 0, card_id: Some(card_id), from: Path::new(&deck_path).join(&file_name), to, step: "planned".into() });
+    }
+    for path in paths {
+        if !path.is_file() {
+            return Err(AppError::new("FILE_NOT_THERE", format!("Файла «{}» уже нет на месте.", file_label(path))));
+        }
+        let to = if pile.is_trash {
+            None
+        } else {
+            let name = free_name(&dir, &file_label(path), &taken);
+            taken.push(name.clone());
+            Some(dir.join(name))
+        };
+        items.push(Item { id: 0, card_id: None, from: path.clone(), to, step: "planned".into() });
     }
 
     let tx = conn.transaction()?;
     tx.execute(
-        "INSERT INTO move(at, method, pile_id, state) VALUES (?1, ?2, ?3, 'pending')",
-        params![now_ms(), method, pile_id],
+        "INSERT INTO move(at, method, pile_id, state, group_id) VALUES (?1, ?2, ?3, 'pending', ?4)",
+        params![now_ms(), method, pile_id, group],
     )?;
     let move_id = tx.last_insert_rowid();
-    for it in &items {
+    for it in items.iter_mut() {
         let cross = it.to.as_deref().map(|to| !same_root(&it.from, to)).unwrap_or(false);
         tx.execute(
             "INSERT INTO move_item(move_id, card_id, from_path, to_path, cross_volume, step) VALUES (?1, ?2, ?3, ?4, ?5, 'planned')",
@@ -318,20 +342,18 @@ pub fn place_with(
                 cross
             ],
         )?;
+        it.id = tx.last_insert_rowid();
     }
     tx.commit()?;
     let conn: &Connection = conn;
 
     let mut failure = None;
     for idx in 0..items.len() {
-        let (card_id, from, to) = (items[idx].card_id, items[idx].from.clone(), items[idx].to.clone());
+        let (item_id, from, to) = (items[idx].id, items[idx].from.clone(), items[idx].to.clone());
         let result = match &to {
             Some(to) => transfer(&from, to, rename, || {
-                set_step(conn, move_id, card_id, "copied")?;
-                conn.execute(
-                    "UPDATE move_item SET cross_volume = 1 WHERE move_id = ?1 AND card_id = ?2",
-                    params![move_id, card_id],
-                )?;
+                set_step(conn, item_id, "copied")?;
+                conn.execute("UPDATE move_item SET cross_volume = 1 WHERE id = ?1", params![item_id])?;
                 Ok(())
             }),
             None => retry(|| trash::delete(&from).map_err(io::Error::other))
@@ -339,7 +361,7 @@ pub fn place_with(
         };
         match result {
             Ok(()) => {
-                set_step(conn, move_id, card_id, "done")?;
+                set_step(conn, item_id, "done")?;
                 items[idx].step = "done".into();
             }
             Err(e) => {
@@ -361,10 +383,12 @@ pub fn place_with(
     }
 
     for it in &items {
-        conn.execute(
-            "UPDATE card SET status = 'placed', pile_id = ?2, current_path = ?3 WHERE id = ?1",
-            params![it.card_id, pile_id, it.to.as_ref().map(|p| p.to_string_lossy().into_owned())],
-        )?;
+        if let Some(card_id) = it.card_id {
+            conn.execute(
+                "UPDATE card SET status = 'placed', pile_id = ?2, current_path = ?3 WHERE id = ?1",
+                params![card_id, pile_id, it.to.as_ref().map(|p| p.to_string_lossy().into_owned())],
+            )?;
+        }
         if let Some(to) = &it.to {
             crate::dupes::repath(conn, &it.from, to)?;
         }
@@ -373,28 +397,96 @@ pub fn place_with(
     load_move(conn, move_id)
 }
 
+fn table_path(conn: &Connection) -> AppResult<String> {
+    Ok(crate::db::get_setting(conn, "table_path")?.unwrap_or_default())
+}
+
+fn trash_pile(conn: &Connection) -> AppResult<i64> {
+    conn.query_row("SELECT id FROM pile WHERE table_path = ?1 AND is_trash = 1", params![table_path(conn)?], |r| r.get(0))
+        .optional()?
+        .ok_or_else(|| AppError::new("PILE_GONE", "Корзины нет — открой стол заново."))
+}
+
+fn deck_card(conn: &Connection, path: &Path) -> AppResult<Option<i64>> {
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else { return Ok(None) };
+    Ok(conn
+        .query_row(
+            "SELECT id FROM card WHERE deck_path = ?1 AND file_name = ?2 AND status IN ('in_deck','deferred')",
+            params![dir.to_string_lossy(), name.to_string_lossy()],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
+pub fn trash_copies(conn: &mut Connection, paths: &[PathBuf]) -> AppResult<MoveView> {
+    trash_copies_with(conn, paths, safe_rename)
+}
+
+pub fn trash_copies_with(conn: &mut Connection, paths: &[PathBuf], rename: RenameFn) -> AppResult<MoveView> {
+    let trash = trash_pile(conn)?;
+    let (mut cards, mut files) = (Vec::new(), Vec::new());
+    for p in paths {
+        match deck_card(conn, p)? {
+            Some(id) => cards.push(id),
+            None => files.push(p.clone()),
+        }
+    }
+    move_with(conn, &cards, &files, trash, "key", None, rename)
+}
+
+pub fn replace_copy(conn: &mut Connection, card_id: i64, worse: &Path) -> AppResult<Vec<MoveView>> {
+    replace_copy_with(conn, card_id, worse, safe_rename)
+}
+
+pub fn replace_copy_with(conn: &mut Connection, card_id: i64, worse: &Path, rename: RenameFn) -> AppResult<Vec<MoveView>> {
+    let dir = worse.parent().unwrap_or(worse);
+    let pile: i64 = conn
+        .query_row(
+            "SELECT id FROM pile WHERE table_path = ?1 AND name = ?2 AND is_trash = 0",
+            params![dir.parent().unwrap_or(dir).to_string_lossy(), dir.file_name().unwrap_or_default().to_string_lossy()],
+            |r| r.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| AppError::new("PILE_GONE", format!("«{}» лежит не в стопке — заменять нечего.", file_label(worse))))?;
+    let trash = trash_pile(conn)?;
+    let first = move_with(conn, &[], &[worse.to_path_buf()], trash, "key", None, rename)?;
+    conn.execute("UPDATE move SET group_id = ?1 WHERE id = ?1", params![first.id])?;
+    match move_with(conn, &[card_id], &[], pile, "key", Some(first.id), rename) {
+        Ok(second) => Ok(vec![first, second]),
+        Err(e) => {
+            let _ = undo_with(conn, first.id, rename);
+            Err(e)
+        }
+    }
+}
+
 fn same_root(a: &Path, b: &Path) -> bool {
     let root = |p: &Path| p.components().next().map(|c| c.as_os_str().to_string_lossy().to_lowercase());
     root(a) == root(b)
 }
 
 fn return_cards(conn: &Connection, move_id: i64, items: &[Item]) -> AppResult<()> {
-    let top: f64 = conn.query_row(
-        "SELECT COALESCE(MIN(c.position), 0) FROM card c
-         WHERE c.status IN ('in_deck','deferred') AND c.deck_path = (SELECT deck_path FROM card WHERE id = ?1)",
-        params![items[0].card_id],
-        |r| r.get(0),
-    )?;
-    for (i, it) in items.iter().enumerate() {
-        conn.execute(
-            "UPDATE card SET status = 'in_deck', pile_id = NULL, current_path = NULL, position = ?2,
-             stage = CASE WHEN stage = 'meta' THEN 'new' ELSE stage END WHERE id = ?1",
-            params![it.card_id, top - (items.len() - i) as f64],
-        )?;
+    for it in items {
         if let Some(to) = &it.to {
             crate::dupes::repath(conn, to, &it.from)?;
         }
-        conn.execute("DELETE FROM example WHERE card_id = ?1", params![it.card_id])?;
+    }
+    let cards: Vec<i64> = items.iter().filter_map(|it| it.card_id).collect();
+    if let Some(first) = cards.first() {
+        let top: f64 = conn.query_row(
+            "SELECT COALESCE(MIN(c.position), 0) FROM card c
+             WHERE c.status IN ('in_deck','deferred') AND c.deck_path = (SELECT deck_path FROM card WHERE id = ?1)",
+            params![first],
+            |r| r.get(0),
+        )?;
+        for (i, id) in cards.iter().enumerate() {
+            conn.execute(
+                "UPDATE card SET status = 'in_deck', pile_id = NULL, current_path = NULL, position = ?2,
+                 stage = CASE WHEN stage = 'meta' THEN 'new' ELSE stage END WHERE id = ?1",
+                params![id, top - (cards.len() - i) as f64],
+            )?;
+            conn.execute("DELETE FROM example WHERE card_id = ?1", params![id])?;
+        }
     }
     set_state(conn, move_id, "undone", None)
 }
@@ -432,7 +524,7 @@ pub fn undo_with(conn: &Connection, move_id: i64, rename: RenameFn) -> AppResult
         if it.step == "restored" {
             continue;
         }
-        set_step(conn, move_id, it.card_id, "restoring")?;
+        set_step(conn, it.id, "restoring")?;
         match &it.to {
             None => {
                 if !it.from.exists() {
@@ -445,17 +537,32 @@ pub fn undo_with(conn: &Connection, move_id: i64, rename: RenameFn) -> AppResult
                 }
             }
         }
-        set_step(conn, move_id, it.card_id, "restored")?;
+        set_step(conn, it.id, "restored")?;
     }
     return_cards(conn, move_id, &items)?;
     load_move(conn, move_id)
 }
 
-pub fn undo_last(conn: &Connection) -> AppResult<Option<MoveView>> {
+pub fn undo_group(conn: &Connection, move_id: i64) -> AppResult<Vec<MoveView>> {
+    let group: Option<i64> = conn.query_row("SELECT group_id FROM move WHERE id = ?1", params![move_id], |r| r.get(0))?;
+    let ids: Vec<i64> = match group {
+        Some(g) => conn
+            .prepare("SELECT id FROM move WHERE group_id = ?1 AND state IN ('done','undoing') ORDER BY id DESC")?
+            .query_map(params![g], |r| r.get(0))?
+            .collect::<Result<_, _>>()?,
+        None => vec![move_id],
+    };
+    ids.into_iter().map(|id| undo(conn, id)).collect()
+}
+
+pub fn undo_last(conn: &Connection) -> AppResult<Vec<MoveView>> {
     let last: Option<i64> = conn
         .query_row("SELECT id FROM move WHERE state = 'done' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
         .optional()?;
-    last.map(|id| undo(conn, id)).transpose()
+    Ok(match last {
+        Some(id) => undo_group(conn, id)?,
+        None => Vec::new(),
+    })
 }
 
 pub fn undo_since(conn: &Connection, since: i64) -> AppResult<(usize, Vec<String>)> {
@@ -562,6 +669,55 @@ mod tests {
         assert!(e.deck.join("a.mp4").exists());
         assert!(!e.table.join("Мемы/a.mp4").exists());
         assert_eq!(status(&e, c), "in_deck");
+    }
+
+    fn with_trash(e: &Env) -> i64 {
+        db::set_setting(&e.conn, "table_path", &e.table.to_string_lossy()).unwrap();
+        e.conn
+            .execute(
+                "INSERT INTO pile(table_path, name, key, ord, is_trash) VALUES (?1, 'Корзина', NULL, 99, 1)",
+                params![e.table.to_string_lossy()],
+            )
+            .unwrap();
+        e.conn.last_insert_rowid()
+    }
+
+    #[test]
+    fn trash_copies_takes_cards_and_pile_files() {
+        let mut e = env();
+        with_trash(&e);
+        let c = card(&e, "a.mp4", b"aaa");
+        let file = e.table.join("Мемы").join("b.mp4");
+        fs::write(&file, b"bbb").unwrap();
+        let m = trash_copies_with(&mut e.conn, &[e.deck.join("a.mp4"), file.clone()], cross_free).unwrap();
+        assert_eq!(m.items.iter().map(|i| i.card_id).collect::<Vec<_>>(), vec![Some(c), None]);
+        assert_eq!(status(&e, c), "placed");
+        assert!(!file.exists());
+    }
+
+    fn cross_free(from: &Path, to: &Path) -> io::Result<()> {
+        fs::rename(from, to)
+    }
+
+    #[test]
+    fn replace_puts_card_in_place_of_worse_and_undoes_both() {
+        let mut e = env();
+        with_trash(&e);
+        let c = card(&e, "best.mp4", b"good");
+        let worse = e.table.join("Мемы").join("worse.mp4");
+        fs::write(&worse, b"bad").unwrap();
+        let ms = replace_copy_with(&mut e.conn, c, &worse, cross_free).unwrap();
+        assert_eq!(ms.len(), 2);
+        assert!(e.table.join("Мемы").join("best.mp4").exists());
+        assert!(!worse.exists());
+        let groups: Vec<Option<i64>> =
+            e.conn.prepare("SELECT group_id FROM move ORDER BY id").unwrap().query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
+        assert_eq!(groups, vec![Some(ms[0].id), Some(ms[0].id)]);
+        let undone = undo_last(&e.conn).unwrap();
+        assert_eq!(undone.len(), 2);
+        assert!(e.deck.join("best.mp4").exists());
+        assert_eq!(status(&e, c), "in_deck");
+        assert!(worse.exists());
     }
 
     #[test]

@@ -1,7 +1,7 @@
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { FolderOpen, LayoutGrid, Layers, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
-import { errorText, ipc, onCard, onDeckChanged, onPilesChanged, onProgress, type AppState, type Card, type Method, type Move, type Pile } from "../../lib/ipc";
+import { errorText, ipc, onCard, onDeckChanged, onPilesChanged, onProgress, type AppState, type Card, type DupeView, type Method, type Move, type Pile } from "../../lib/ipc";
 import { isTypingChar, keyOf } from "../../lib/keys";
 import { cardsWord } from "../../lib/plural";
 import { useHints } from "../../lib/useHints";
@@ -159,7 +159,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
   const dupe = dupes[0] ?? null;
 
   const place = useCallback(
-    async (pile: Pile, method: Method) => {
+    async (pile: Pile, method: Method, send?: (card: Card) => Promise<{ move: Move; piles: Pile[] }>) => {
       const card = cardsRef.current[0];
       if (!card) return;
       play(pile.isTrash ? "trash" : method === "new_pile" ? "new_pile" : "place");
@@ -178,7 +178,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
       setQuery("");
       search.current?.blur();
       try {
-        const r = await ipc.place([card.id], pile.id, method);
+        const r = await (send ? send(card) : ipc.place([card.id], pile.id, method));
         setPiles(r.piles);
         setLast(r.move);
         if (cardsRef.current.length === 0) play("empty");
@@ -235,16 +235,17 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
   );
 
   const trashCopies = useCallback(
-    async (ids: number[]) => {
+    async (copies: DupeView[]) => {
       const trash = pilesRef.current.find((p) => p.isTrash);
-      if (!trash || !ids.length) return;
+      if (!trash || !copies.length) return;
+      const ids = copies.filter((d) => d.where === "deck" && d.cardId !== null).map((d) => d.cardId!);
       play("trash");
       shake(trash.id);
       ids.forEach((id) => pending.current.add(id));
       setCards((cs) => cs.filter((c) => !ids.includes(c.id)));
       setCounts((c) => ({ ...c, left: c.left - ids.length, placed: c.placed + ids.length }));
       try {
-        const r = await ipc.place(ids, trash.id, "key");
+        const r = await ipc.trashCopies(copies.map((d) => d.path));
         setPiles(r.piles);
         setLast(r.move);
       } catch (e) {
@@ -263,12 +264,11 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
     const trash = pilesRef.current.find((p) => p.isTrash);
     if (!dupe || !trash) return;
     if (dupe.better) return place(trash, "key");
-    const ids = dupes.filter((d) => !d.better && d.cardId !== null).map((d) => d.cardId!);
-    if (!ids.length) {
-      setToast("Лучшая копия — эта карта, а вторая лежит в стопке. Замену сделаем в сравнении — скоро.");
-      return;
-    }
-    return trashCopies(ids);
+    const worse = dupes.filter((d) => !d.better);
+    const inPile = worse.filter((d) => d.where === "pile");
+    const target = inPile.length === 1 ? pilesRef.current.find((p) => !p.isTrash && p.name === inPile[0].pileName) : undefined;
+    if (target && worse.length === 1) return place(target, "key", (card) => ipc.replaceCopy(card.id, inPile[0].path));
+    return trashCopies(worse);
   }, [dupe, dupes, place, trashCopies]);
 
   const dismissDupe = useCallback(async () => {
@@ -619,6 +619,8 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
                 <DupeBadge
                   dupe={dupe}
                   more={dupes.length - 1}
+                  durationMs={current.durationMs}
+                  replace={dupes.length === 1 && dupe.where === "pile"}
                   hint={hintPile ? { pile: hintPile, score: hints.hints[0].score } : null}
                   canDefer={cards.length > 1}
                   onTrash={() => void resolveDupe()}

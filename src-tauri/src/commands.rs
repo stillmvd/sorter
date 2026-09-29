@@ -216,10 +216,12 @@ pub struct Undone {
     piles: Vec<PileView>,
 }
 
-fn undone(conn: &Connection, mv: Option<MoveView>) -> AppResult<Undone> {
+fn undone(conn: &Connection, moves: Vec<MoveView>) -> AppResult<Undone> {
     hints::prune(conn)?;
-    let ids: Vec<i64> = mv.as_ref().map(|m| m.items.iter().map(|i| i.card_id).collect()).unwrap_or_default();
+    let ids: Vec<i64> = moves.iter().flat_map(|m| m.items.iter().filter_map(|i| i.card_id)).collect();
     let (_, t) = paths(conn)?;
+    let mv = moves.iter().position(|m| m.items.iter().any(|i| i.card_id.is_some())).or((!moves.is_empty()).then_some(0));
+    let mv = mv.and_then(|i| moves.into_iter().nth(i));
     Ok(Undone { cards: deck::cards(conn, &ids)?, piles: piles::list(conn, &t)?, mv })
 }
 
@@ -233,8 +235,8 @@ pub fn undo_last(state: State<AppState>) -> AppResult<Undone> {
 #[tauri::command]
 pub fn undo_move(state: State<AppState>, move_id: i64) -> AppResult<Undone> {
     let conn = state.conn();
-    let mv = moves::undo(&conn, move_id)?;
-    undone(&conn, Some(mv))
+    let moves = moves::undo_group(&conn, move_id)?;
+    undone(&conn, moves)
 }
 
 #[derive(Serialize)]
@@ -314,4 +316,22 @@ pub fn dupes_for(state: State<AppState>, card_id: i64) -> AppResult<Vec<DupeView
 #[tauri::command]
 pub fn dismiss_dupe(state: State<AppState>, a: String, b: String) -> AppResult<()> {
     dupes::dismiss(&state.conn(), &a, &b)
+}
+
+#[tauri::command]
+pub fn trash_copies(state: State<AppState>, paths: Vec<String>) -> AppResult<Placed> {
+    let mut conn = state.conn();
+    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    let mv = moves::trash_copies(&mut conn, &paths)?;
+    let (_, t) = self::paths(&conn)?;
+    Ok(Placed { mv, piles: piles::list(&conn, &t)? })
+}
+
+#[tauri::command]
+pub fn replace_copy(state: State<AppState>, card_id: i64, worse_path: String) -> AppResult<Placed> {
+    let mut conn = state.conn();
+    let mv = moves::replace_copy(&mut conn, card_id, Path::new(&worse_path))?.pop().expect("два хода");
+    hints::learn(&conn)?;
+    let (_, t) = paths(&conn)?;
+    Ok(Placed { mv, piles: piles::list(&conn, &t)? })
 }

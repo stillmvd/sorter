@@ -59,13 +59,13 @@ pub fn init(conn: &Connection) -> rusqlite::Result<()> {
            error TEXT
          );
          CREATE TABLE IF NOT EXISTS move_item (
+           id INTEGER PRIMARY KEY,
            move_id INTEGER NOT NULL REFERENCES move(id),
-           card_id INTEGER NOT NULL REFERENCES card(id),
+           card_id INTEGER REFERENCES card(id),
            from_path TEXT NOT NULL,
            to_path TEXT,
            cross_volume INTEGER NOT NULL DEFAULT 0,
-           step TEXT NOT NULL CHECK (step IN ('planned','copied','done','restoring','restored')),
-           PRIMARY KEY (move_id, card_id)
+           step TEXT NOT NULL CHECK (step IN ('planned','copied','done','restoring','restored'))
          );
          CREATE TABLE IF NOT EXISTS example (
            id INTEGER PRIMARY KEY,
@@ -119,6 +119,28 @@ pub fn init(conn: &Connection) -> rusqlite::Result<()> {
         .exists([])?;
     if !has_group {
         conn.execute("ALTER TABLE move ADD COLUMN group_id INTEGER", [])?;
+    }
+    let items_by_card: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('move_item') WHERE name = 'card_id' AND \"notnull\" = 1")?
+        .exists([])?;
+    if items_by_card {
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE move_item_v2 (
+               id INTEGER PRIMARY KEY,
+               move_id INTEGER NOT NULL REFERENCES move(id),
+               card_id INTEGER REFERENCES card(id),
+               from_path TEXT NOT NULL,
+               to_path TEXT,
+               cross_volume INTEGER NOT NULL DEFAULT 0,
+               step TEXT NOT NULL CHECK (step IN ('planned','copied','done','restoring','restored'))
+             );
+             INSERT INTO move_item_v2(move_id, card_id, from_path, to_path, cross_volume, step)
+               SELECT move_id, card_id, from_path, to_path, cross_volume, step FROM move_item ORDER BY rowid;
+             DROP TABLE move_item;
+             ALTER TABLE move_item_v2 RENAME TO move_item;
+             COMMIT;",
+        )?;
     }
     conn.execute(
         "INSERT OR IGNORE INTO settings(key, value) VALUES ('schema_version', ?1)",

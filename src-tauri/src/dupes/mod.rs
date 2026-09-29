@@ -249,7 +249,9 @@ pub fn dupes_for(conn: &Connection, card_id: i64) -> AppResult<Vec<DupeView>> {
     let (me, _, _, _) = copy_of(conn, &card.path, &deck)?;
     let mut out = Vec::new();
     for (a, b, kind, confidence, offset) in rows {
-        let other = if a == card.path { b } else { a };
+        let mine = a == card.path;
+        let offset = offset.map(|o| if mine { o } else { -o });
+        let other = if mine { b } else { a };
         let p = PathBuf::from(&other);
         if !p.is_file() {
             continue;

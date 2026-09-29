@@ -1,14 +1,24 @@
 import { Copy } from "lucide-react";
-import type { DupeKind, DupeView, Pile } from "../../lib/ipc";
+import type { DupeView, Pile } from "../../lib/ipc";
 import { Button } from "../ui/Button";
 import { Kbd } from "../ui/Kbd";
 
-const KINDS: Record<DupeKind, string> = {
-  exact: "точная копия",
-  same: "та же запись, другое качество",
-  trim: "обрезка",
-  crop: "другое кадрирование",
+const clock = (ms: number) => {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
+
+function kindText(dupe: DupeView, mine: number | null) {
+  if (dupe.kind === "exact") return "точная копия";
+  if (dupe.kind === "crop") return "кадрирована";
+  if (dupe.kind === "same") return `та же запись, ${dupe.better ? "лучше" : "хуже"} качество`;
+  const theirs = dupe.durationMs;
+  const offset = dupe.offsetMs ?? 0;
+  if (mine === null || theirs === null) return "обрезка";
+  return theirs <= mine
+    ? `обрезка: ${clock(offset)}–${clock(offset + theirs)} из ${clock(mine)}`
+    : `эта карта — обрезка: ${clock(-offset)}–${clock(-offset + mine)} из ${clock(theirs)}`;
+}
 
 const mb = (b: number) => `${(b / 1024 ** 2).toFixed(1).replace(".", ",")} МБ`;
 const name = (path: string) => path.split("\\").pop() ?? path;
@@ -16,6 +26,8 @@ const name = (path: string) => path.split("\\").pop() ?? path;
 export function DupeBadge({
   dupe,
   more,
+  durationMs,
+  replace,
   hint,
   canDefer,
   onTrash,
@@ -24,6 +36,8 @@ export function DupeBadge({
 }: {
   dupe: DupeView;
   more: number;
+  durationMs: number | null;
+  replace: boolean;
   hint: { pile: Pile; score: number } | null;
   canDefer: boolean;
   onTrash: () => void;
@@ -48,7 +62,7 @@ export function DupeBadge({
         </div>
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="text-xs font-medium text-dim">
-            Дубль · {KINDS[dupe.kind]} · {dupe.confidence}%
+            Дубль · {kindText(dupe, durationMs)} · {dupe.confidence}%
           </div>
           <div className="truncate text-[22px] font-bold tracking-[-0.02em]">{where}</div>
           <div className="truncate text-[13px] text-dim" title={dupe.path}>
@@ -56,7 +70,7 @@ export function DupeBadge({
           </div>
         </div>
         <Button variant="primary" size={44} hotkey="D" onClick={onTrash}>
-          {dupe.better ? "Убрать в Корзину" : "Убрать копию"}
+          {dupe.better ? "Убрать в Корзину" : replace ? "Заменить" : "Убрать копию"}
         </Button>
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">

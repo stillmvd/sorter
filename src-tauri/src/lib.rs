@@ -67,6 +67,8 @@ pub fn run() {
             commands::develop_control,
             commands::dupes_for,
             commands::dismiss_dupe,
+            commands::trash_copies,
+            commands::replace_copy,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

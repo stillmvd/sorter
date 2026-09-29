@@ -31,7 +31,7 @@ export type Pile = {
 export type Method = "key" | "hint" | "search" | "table" | "drag" | "new_pile";
 
 export type MoveItem = {
-  cardId: number;
+  cardId: number | null;
   fileName: string;
   finalName: string | null;
   fromPath: string;
@@ -124,5 +124,8 @@ export const ipc = {
   hints: (cardIds: number[]) => invoke<Hints>("hints", { cardIds }),
   dupesFor: (cardId: number) => invoke<DupeView[]>("dupes_for", { cardId }),
   dismissDupe: (a: string, b: string) => invoke<void>("dismiss_dupe", { a, b }),
+  trashCopies: (paths: string[]) => invoke<{ move: Move; piles: Pile[] }>("trash_copies", { paths }),
+  replaceCopy: (cardId: number, worsePath: string) =>
+    invoke<{ move: Move; piles: Pile[] }>("replace_copy", { cardId, worsePath }),
   developControl: (pause: boolean) => invoke<void>("develop_control", { pause }),
 };
