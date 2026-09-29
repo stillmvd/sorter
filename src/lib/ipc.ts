@@ -54,6 +54,24 @@ export type Hint = { pileId: number; score: number };
 
 export type Hints = { enabled: boolean; ready: boolean; examples: number; hints: Hint[] };
 
+export type DupeKind = "exact" | "same" | "trim" | "crop";
+
+export type DupeView = {
+  path: string;
+  where: "deck" | "pile";
+  pileName: string | null;
+  cardId: number | null;
+  kind: DupeKind;
+  confidence: number;
+  offsetMs: number | null;
+  durationMs: number | null;
+  width: number | null;
+  height: number | null;
+  bitrate: number | null;
+  size: number;
+  better: boolean;
+};
+
 export type Settings = Partial<Record<"deck_path" | "table_path" | "hints_enabled" | "theme" | "muted" | "mode" | "volume", string>>;
 
 export type Developing = { done: number; total: number; paused: boolean };
@@ -83,6 +101,7 @@ export const onDeckChanged = (fn: (d: { added: Card[]; gone: number[] }) => void
   listen<{ added: Card[]; gone: number[] }>("deck://changed", (e) => fn(e.payload));
 export const onPilesChanged = (fn: (p: Pile[]) => void) => listen<Pile[]>("piles://changed", (e) => fn(e.payload));
 export const onHintsChanged = (fn: () => void) => listen("hints://changed", () => fn());
+export const onDupesChanged = (fn: () => void) => listen("dupes://changed", () => fn());
 export const onProgress = (fn: (p: Developing) => void) => listen<Developing>("develop://progress", (e) => fn(e.payload));
 
 export const ipc = {
@@ -103,5 +122,7 @@ export const ipc = {
   setPileKey: (pileId: number, key: string | null) => invoke<Pile[]>("set_pile_key", { pileId, key }),
   removePile: (pileId: number) => invoke<Pile[]>("remove_pile", { pileId }),
   hints: (cardIds: number[]) => invoke<Hints>("hints", { cardIds }),
+  dupesFor: (cardId: number) => invoke<DupeView[]>("dupes_for", { cardId }),
+  dismissDupe: (a: string, b: string) => invoke<void>("dismiss_dupe", { a, b }),
   developControl: (pause: boolean) => invoke<void>("develop_control", { pause }),
 };

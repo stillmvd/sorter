@@ -2,6 +2,7 @@ mod commands;
 mod db;
 mod deck;
 mod develop;
+mod dupes;
 mod error;
 mod hints;
 mod media;
@@ -64,6 +65,8 @@ pub fn run() {
             commands::set_pile_key,
             commands::remove_pile,
             commands::develop_control,
+            commands::dupes_for,
+            commands::dismiss_dupe,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,5 +1,6 @@
 use crate::db;
 use crate::deck::{self, CardView};
+use crate::dupes;
 use crate::hints::{self, Engine};
 use std::collections::HashSet;
 use rusqlite::{params, Connection};
@@ -380,8 +381,19 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<Atomi
         let mut last_emit = Instant::now() - Duration::from_secs(1);
         let mut was_busy = false;
         let mut learner = Learner::new();
+        let mut dupes_at = Instant::now() - Duration::from_secs(60);
         loop {
             let is_paused = paused.load(Ordering::Relaxed);
+            if !is_paused && dupes_at.elapsed() > Duration::from_secs(3) {
+                match dupes::refresh_exact(&conn) {
+                    Ok(true) => {
+                        let _ = app.emit("dupes://changed", ());
+                    }
+                    Ok(false) => {}
+                    Err(e) => eprintln!("dupes: {e}"),
+                }
+                dupes_at = Instant::now();
+            }
             let jobs = if is_paused { Vec::new() } else { next(&conn, workers()).unwrap_or_default() };
             match jobs.is_empty() {
                 false => {

@@ -5,7 +5,9 @@ import { errorText, ipc, onCard, onDeckChanged, onPilesChanged, onProgress, type
 import { isTypingChar, keyOf } from "../../lib/keys";
 import { cardsWord } from "../../lib/plural";
 import { useHints } from "../../lib/useHints";
+import { useDupes } from "../../lib/useDupes";
 import { HintBox } from "./HintBox";
+import { DupeBadge } from "./DupeBadge";
 import { play } from "../../lib/sound";
 import { pressToDrag } from "../fx/Drag";
 import { Flights, motionOff, pileElement, shake, snapshot, type Flight } from "../fx/Flight";
@@ -69,6 +71,8 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
   }, []);
   const pending = useRef(new Set<number>());
   const search = useRef<HTMLInputElement>(null);
+  const pilesRef = useRef(piles);
+  pilesRef.current = piles;
   const cardsRef = useRef(cards);
   cardsRef.current = cards;
   const sheetRef = useRef(sheet);
@@ -151,6 +155,8 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
   const hints = useHints(hintIds, piles);
   const hintPile = hints.hints[0] ? (piles.find((p) => p.id === hints.hints[0].pileId) ?? null) : null;
   const hot = matches?.[0]?.id ?? (query ? null : (hintPile?.id ?? null));
+  const dupes = useDupes(mode === "deck" && current ? current.id : null, piles);
+  const dupe = dupes[0] ?? null;
 
   const place = useCallback(
     async (pile: Pile, method: Method) => {
@@ -228,6 +234,53 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
     [loadSheet],
   );
 
+  const trashCopies = useCallback(
+    async (ids: number[]) => {
+      const trash = pilesRef.current.find((p) => p.isTrash);
+      if (!trash || !ids.length) return;
+      play("trash");
+      shake(trash.id);
+      ids.forEach((id) => pending.current.add(id));
+      setCards((cs) => cs.filter((c) => !ids.includes(c.id)));
+      setCounts((c) => ({ ...c, left: c.left - ids.length, placed: c.placed + ids.length }));
+      try {
+        const r = await ipc.place(ids, trash.id, "key");
+        setPiles(r.piles);
+        setLast(r.move);
+      } catch (e) {
+        play("error");
+        setCounts((c) => ({ ...c, left: c.left + ids.length, placed: c.placed - ids.length }));
+        setToast(errorText(e));
+      } finally {
+        ids.forEach((id) => pending.current.delete(id));
+      }
+      void refill();
+    },
+    [refill],
+  );
+
+  const resolveDupe = useCallback(() => {
+    const trash = pilesRef.current.find((p) => p.isTrash);
+    if (!dupe || !trash) return;
+    if (dupe.better) return place(trash, "key");
+    const ids = dupes.filter((d) => !d.better && d.cardId !== null).map((d) => d.cardId!);
+    if (!ids.length) {
+      setToast("Лучшая копия — эта карта, а вторая лежит в стопке. Замену сделаем в сравнении — скоро.");
+      return;
+    }
+    return trashCopies(ids);
+  }, [dupe, dupes, place, trashCopies]);
+
+  const dismissDupe = useCallback(async () => {
+    if (!dupe || !current) return;
+    try {
+      await ipc.dismissDupe(current.path, dupe.path);
+      setPiles((p) => [...p]);
+    } catch (e) {
+      setToast(errorText(e));
+    }
+  }, [dupe, current]);
+
   const put = useCallback(
     (pile: Pile, method: Method) => {
       if (mode === "deck") return place(pile, method);
@@ -243,8 +296,6 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
     void ipc.setSetting("mode", next);
   }, []);
 
-  const pilesRef = useRef(piles);
-  pilesRef.current = piles;
   const [dragPile, setDragPile] = useState<number | null>(null);
   const dropTo = useRef<(pile: Pile) => void>(() => undefined);
   dropTo.current = (pile: Pile) => void put(pile, "drag");
@@ -448,6 +499,11 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
       return;
     }
     const k = keyOf(e);
+    if (mode === "deck" && dupe && (k === "D" || k === "N")) {
+      e.preventDefault();
+      void (k === "D" ? resolveDupe() : dismissDupe());
+      return;
+    }
     const pile = k ? piles.find((p) => p.key === k) : undefined;
     if (pile) {
       e.preventDefault();
@@ -559,11 +615,25 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
                 </div>
               </div>
               <FilmStrip card={current} cacheDir={initial.cacheDir} />
-              <HintBox hints={hints} piles={piles} onPlace={(p) => put(p, "hint")} />
+              {dupe ? (
+                <DupeBadge
+                  dupe={dupe}
+                  more={dupes.length - 1}
+                  hint={hintPile ? { pile: hintPile, score: hints.hints[0].score } : null}
+                  canDefer={cards.length > 1}
+                  onTrash={() => void resolveDupe()}
+                  onDismiss={() => void dismissDupe()}
+                  onDefer={() => void defer()}
+                />
+              ) : (
+                <HintBox hints={hints} piles={piles} onPlace={(p) => put(p, "hint")} />
+              )}
               <div className="flex items-center gap-2">
-                <Button onClick={defer} hotkey="Tab" disabled={cards.length < 2}>
-                  В конец колоды
-                </Button>
+                {!dupe && (
+                  <Button onClick={defer} hotkey="Tab" disabled={cards.length < 2}>
+                    В конец колоды
+                  </Button>
+                )}
                 {broken.has(current.id) && (
                   <Button onClick={() => openPath(current.path)} hotkey="Ctrl O">
                     Открыть в плеере
@@ -572,7 +642,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
                 <div className="flex-1" />
                 <VolumeRow muted={muted} volume={volume} onMute={toggleMute} onVolume={changeVolume} />
               </div>
-              <KeyLegend muted={muted} />
+              <KeyLegend muted={muted} dupe={!!dupe} />
             </div>
           )}
         </div>

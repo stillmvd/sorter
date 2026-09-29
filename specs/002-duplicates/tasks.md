@@ -44,10 +44,10 @@
 **Independent Test**: quickstart 1, 2.
 
 - [ ] T012 [US1] `src-tauri/src/moves.rs`: `group_id` у ходов, `undo_last` забирает все ходы группы; `trash_paths(paths)` — один ход в «Корзину» для карт колоды и файлов стопок (файл стопки без карты — `MoveItem` с `card_id` null или карта-«призрак» со `status placed`, решить в задаче; журнал и отмена как у обычного хода); тесты: ход группы и отмена группы
-- [ ] T013 [US1] `src-tauri/src/commands.rs`: `dupes_for(card_id)` → `DupeView[]` (контракт ipc.md, лучшая первой, `better` по FR-009), `dismiss_dupe(a, b)`, `trash_copies(paths)`
-- [ ] T014 [P] [US1] `src/lib/ipc.ts` + `src/lib/useDupes.ts`: типы `DupeView`, запрос по текущей карте, перезапрос по `dupes://changed` и после ходов; защита от устаревшего ответа (как `useHints`)
-- [ ] T015 [US1] `src/components/deck/DupeBadge.tsx` по холсту «Дубль на карте»: круг-иконка двух карт (инверсия), «Дубль · <вид> · <N>%», «уже лежит в «<стопка>»» / «в колоде», имя и сведения второй копии, кнопки «Сравнить» `C` и «Убрать в Корзину» `D` (инверсия), ниже — приглушённая подсказка стопки, «В конец» `Tab`, «Это разные видео» `N`; кнопки `whitespace-nowrap`, клавиши — `Kbd` колпачками
-- [ ] T016 [US1] `DeckScreen.tsx`: плашка вместо блока подсказки при дубле; клавиши `D` / `N` (contracts/ipc.md, клавиши сверяются по `code`), Ctrl+Z забирает; `KeyLegend` — строки `D`, `C`, `N` только при дубле
+- [ ] T013 [US1] (сделано `dupes_for`, `dismiss_dupe`; пока без `trash_copies` — копии-карты убираются обычным `place` в Корзину) `src-tauri/src/commands.rs`: `dupes_for(card_id)` → `DupeView[]` (контракт ipc.md, лучшая первой, `better` по FR-009), `dismiss_dupe(a, b)`, `trash_copies(paths)`
+- [X] T014 [P] [US1] `src/lib/ipc.ts` + `src/lib/useDupes.ts`: типы `DupeView`, запрос по текущей карте, перезапрос по `dupes://changed` и после ходов; защита от устаревшего ответа (как `useHints`)
+- [ ] T015 [US1] (сделано без «Сравнить» — ждёт US2) `src/components/deck/DupeBadge.tsx` по холсту «Дубль на карте»: круг-иконка двух карт (инверсия), «Дубль · <вид> · <N>%», «уже лежит в «<стопка>»» / «в колоде», имя и сведения второй копии, кнопки «Сравнить» `C` и «Убрать в Корзину» `D` (инверсия), ниже — приглушённая подсказка стопки, «В конец» `Tab`, «Это разные видео» `N`; кнопки `whitespace-nowrap`, клавиши — `Kbd` колпачками
+- [X] T016 [US1] `DeckScreen.tsx`: плашка вместо блока подсказки при дубле; клавиши `D` / `N` (contracts/ipc.md, клавиши сверяются по `code`), Ctrl+Z забирает; `KeyLegend` — строки `D`, `C`, `N` только при дубле
 
 **Checkpoint**: quickstart 1–2 на тестовой колоде.
 

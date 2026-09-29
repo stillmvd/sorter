@@ -6,6 +6,11 @@ function Cap({ children }: { children: string }) {
   );
 }
 
+const DUPE_ROWS: { keys: string[]; label: string }[] = [
+  { keys: ["D"], label: "убрать лишнюю копию в Корзину" },
+  { keys: ["N"], label: "это разные видео — не дубль" },
+];
+
 const ROWS: { keys: string[]; label: string }[] = [
   { keys: ["1–9", "Q…P"], label: "положить в стопку" },
   { keys: ["Enter"], label: "в подсказанную или найденную стопку" },
@@ -21,10 +26,10 @@ const ROWS: { keys: string[]; label: string }[] = [
   { keys: ["Ctrl", "2"], label: "стол — разложить пачкой" },
 ];
 
-export function KeyLegend({ muted }: { muted: boolean }) {
+export function KeyLegend({ muted, dupe = false }: { muted: boolean; dupe?: boolean }) {
   return (
     <div className="flex flex-col gap-1">
-      {ROWS.map((r) => (
+      {(dupe ? [...DUPE_ROWS, ...ROWS] : ROWS).map((r) => (
         <div key={r.label} className="flex items-center gap-3 text-[13px] text-dim">
           <span className="flex w-[104px] shrink-0 items-center gap-1">
             {r.keys.map((k, i) => (

@@ -1,5 +1,6 @@
 use crate::db::{get_setting, set_setting};
 use crate::deck::{self, CardView};
+use crate::dupes::{self, DupeView};
 use crate::error::{AppError, AppResult};
 use crate::hints;
 use crate::moves::{self, MoveView};
@@ -303,4 +304,14 @@ pub fn remove_pile(state: State<AppState>, pile_id: i64) -> AppResult<Vec<PileVi
     let (_, t) = paths(&conn)?;
     piles::remove(&conn, pile_id)?;
     piles::list(&conn, &t)
+}
+
+#[tauri::command]
+pub fn dupes_for(state: State<AppState>, card_id: i64) -> AppResult<Vec<DupeView>> {
+    dupes::dupes_for(&state.conn(), card_id)
+}
+
+#[tauri::command]
+pub fn dismiss_dupe(state: State<AppState>, a: String, b: String) -> AppResult<()> {
+    dupes::dismiss(&state.conn(), &a, &b)
 }
