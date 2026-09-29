@@ -390,11 +390,11 @@ pub fn playable(state: State<AppState>, card_id: i64) -> AppResult<String> {
         let conn = state.conn();
         deck::cards(&conn, &[card_id])?.into_iter().next().map(|c| c.path)
     }
-    .ok_or_else(|| AppError::new("NO_CARD", "Карта не найдена."))?;
+    .ok_or_else(|| AppError::new("NO_CARD", "Этой карты уже нет в колоде — её файл убрали. Колода обновится сама."))?;
     let dir = state.data_dir.join("cache").join(card_id.to_string());
     let dst = dir.join("play.mp4");
     if !dst.exists() {
-        std::fs::create_dir_all(&dir).map_err(|e| AppError::new("CACHE", e.to_string()))?;
+        std::fs::create_dir_all(&dir).map_err(|e| AppError::new("CACHE", format!("Не получилось создать папку для копии видео ({e}). Проверь место на диске.")))?;
         crate::playable::remux(Path::new(&path), &dst).map_err(|e| AppError::new("NOT_PLAYABLE", format!("Не получилось подготовить видео: {e}")))?;
     }
     Ok(dst.to_string_lossy().into_owned())

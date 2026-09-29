@@ -138,7 +138,7 @@ export function DupesScreen({
 
       {shown.length === 0 ? (
         <div className="flex min-h-0 flex-1 items-center text-[15px] text-dim">
-          {groups.length ? "В этом фильтре групп нет." : "Дублей не нашлось — или отпечатки ещё считаются."}
+          {groups.length ? "В этом фильтре групп нет — выбери другой." : "Дублей не нашлось — или отпечатки ещё считаются."}
         </div>
       ) : (
         <div className="-m-1.5 flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-1.5 [--scroll-inset:20px]">

@@ -74,7 +74,7 @@ export const Tile = memo(function Tile({
       {card.frames > 0 ? (
         <img src={frameSrc(cacheDir, card, frame)} alt="" draggable={false} className="absolute inset-0 h-full w-full object-cover" />
       ) : (
-        <span className="absolute inset-2 grid place-items-center rounded-lg border border-dashed border-[#3d3d44] font-mono text-[10px] tracking-[0.06em] text-[#6d6d74]">
+        <span className="absolute inset-2 grid place-items-center rounded-lg border border-dashed border-[#3d3d44] font-mono text-[10px] tracking-[0.06em] text-[#86868d]">
           {card.stage === "broken" ? "не проявилось" : "проявляется…"}
         </span>
       )}

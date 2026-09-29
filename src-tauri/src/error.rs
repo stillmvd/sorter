@@ -24,7 +24,7 @@ impl std::fmt::Display for AppError {
 
 impl From<rusqlite::Error> for AppError {
     fn from(e: rusqlite::Error) -> Self {
-        AppError::new("DB", format!("Ошибка базы Sorter: {e}"))
+        AppError::new("DB", format!("Sorter не смог прочитать или записать свою базу ({e}). Перезапусти Sorter и попробуй снова."))
     }
 }
 
@@ -49,6 +49,6 @@ pub fn io_error(e: &io::Error, path: &Path) -> AppError {
             "FILE_IN_THE_WAY",
             format!("На месте «{name}» уже лежит другой файл — убери его и попробуй снова."),
         ),
-        _ => AppError::new("IO", format!("Не получилось переместить «{name}»: {e}")),
+        _ => AppError::new("IO", format!("Не получилось переместить «{name}» ({e}). Попробуй ещё раз; если повторится — проверь диск и права на папку.")),
     }
 }

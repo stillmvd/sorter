@@ -164,14 +164,14 @@ fn trash_restore(from: &Path) -> AppResult<()> {
             format!("На месте «{}» уже лежит другой файл — убери его и попробуй снова.", file_label(from)),
         ));
     }
-    let items = trash::os_limited::list().map_err(|e| AppError::new("TRASH", format!("Корзина недоступна: {e}")))?;
+    let items = trash::os_limited::list().map_err(|e| AppError::new("TRASH", format!("Корзина Windows сейчас недоступна ({e}). Попробуй ещё раз или верни файл из корзины вручную.")))?;
     let found = items
         .into_iter()
         .filter(|i| same_path(&i.original_parent.join(&i.name), from))
         .max_by_key(|i| i.time_deleted);
     match found {
         Some(item) => trash::os_limited::restore_all([item])
-            .map_err(|e| AppError::new("TRASH", format!("Не получилось вернуть «{}» из корзины: {e}", file_label(from)))),
+            .map_err(|e| AppError::new("TRASH", format!("Не получилось вернуть «{}» из корзины ({e}). Открой корзину Windows и восстанови файл вручную.", file_label(from)))),
         None => Err(AppError::new(
             "FILE_NOT_THERE",
             format!("«{}» нет в корзине — возможно, корзину очистили.", file_label(from)),
@@ -186,7 +186,7 @@ fn load_pile(conn: &Connection, pile_id: i64) -> AppResult<PileRow> {
         |r| Ok(PileRow { name: r.get(0)?, table_path: r.get(1)?, is_trash: r.get(2)?, exists: r.get(3)? }),
     )
     .optional()?
-    .ok_or_else(|| AppError::new("PILE_GONE", "Такой стопки больше нет."))
+    .ok_or_else(|| AppError::new("PILE_GONE", "Этой стопки больше нет — её папку убрали со стола. Выбери другую стопку или создай её заново."))
 }
 
 fn set_step(conn: &Connection, item_id: i64, step: &str) -> AppResult<()> {
@@ -284,7 +284,7 @@ pub fn move_with(
     }
     let pile = load_pile(conn, pile_id)?;
     if !pile.is_trash && !pile.exists {
-        return Err(AppError::new("PILE_GONE", format!("Папки стопки «{}» больше нет.", pile.name)));
+        return Err(AppError::new("PILE_GONE", format!("Папки стопки «{}» больше нет — её удалили или переименовали вне Sorter. Создай стопку заново.", pile.name)));
     }
     let dir = Path::new(&pile.table_path).join(&pile.name);
     let mut items = Vec::with_capacity(card_ids.len());
@@ -297,9 +297,9 @@ pub fn move_with(
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()?
-            .ok_or_else(|| AppError::new("NO_CARD", "Карта не найдена."))?;
+            .ok_or_else(|| AppError::new("NO_CARD", "Этой карты уже нет в колоде — её файл убрали. Колода обновится сама."))?;
         if status != "in_deck" && status != "deferred" {
-            return Err(AppError::new("NOT_IN_DECK", format!("«{file_name}» уже не в колоде.")));
+            return Err(AppError::new("NOT_IN_DECK", format!("«{file_name}» уже не в колоде — его переместили вне Sorter. Колода обновится сама.")));
         }
         let to = if pile.is_trash {
             None
@@ -357,7 +357,7 @@ pub fn move_with(
                 Ok(())
             }),
             None => retry(|| trash::delete(&from).map_err(io::Error::other))
-                .map_err(|e| AppError::new("TRASH", format!("Не получилось отправить «{}» в корзину: {e}", file_label(&from)))),
+                .map_err(|e| AppError::new("TRASH", format!("Не получилось отправить «{}» в корзину ({e}). Проверь, что корзина включена для этого диска, и попробуй снова.", file_label(&from)))),
         };
         match result {
             Ok(()) => {

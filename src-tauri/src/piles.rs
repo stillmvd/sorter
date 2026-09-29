@@ -132,7 +132,7 @@ pub fn rename(conn: &Connection, pile_id: i64, name: &str) -> AppResult<()> {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })
         .optional()?
-        .ok_or_else(|| AppError::new("PILE_GONE", "Такой стопки больше нет."))?;
+        .ok_or_else(|| AppError::new("PILE_GONE", "Этой стопки больше нет — её папку убрали со стола. Выбери другую стопку или создай её заново."))?;
     if is_trash {
         return Err(AppError::new("BAD_NAME", "Корзину переименовать нельзя."));
     }
@@ -160,7 +160,7 @@ pub fn remove(conn: &Connection, pile_id: i64) -> AppResult<()> {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })
         .optional()?
-        .ok_or_else(|| AppError::new("PILE_GONE", "Такой стопки больше нет."))?;
+        .ok_or_else(|| AppError::new("PILE_GONE", "Этой стопки больше нет — её папку убрали со стола. Выбери другую стопку или создай её заново."))?;
     if is_trash {
         return Err(AppError::new("BAD_NAME", "Корзину удалить нельзя."));
     }

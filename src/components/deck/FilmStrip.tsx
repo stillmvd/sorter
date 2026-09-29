@@ -83,8 +83,8 @@ export function FilmStrip({ card, cacheDir }: { card: Card; cacheDir: string }) 
       </div>
       <Holes />
       {!ready && (
-        <div className="text-center font-mono text-[10px] tracking-[0.06em] text-[#6d6d74]">
-          {card.stage === "broken" ? "не удалось проявить" : "проявляется…"}
+        <div className="text-center font-mono text-[10px] tracking-[0.06em] text-[#86868d]">
+          {card.stage === "broken" ? "не проявилось" : "проявляется…"}
         </div>
       )}
     </div>
