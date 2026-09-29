@@ -335,6 +335,39 @@ pub fn read_frames(path: &Path) -> Option<Vec<image::RgbImage>> {
     None
 }
 
+pub fn cache_size(cache: &Path) -> (u64, usize) {
+    fn walk(dir: &Path) -> u64 {
+        fs::read_dir(dir)
+            .map(|it| {
+                it.filter_map(|e| e.ok())
+                    .map(|e| match e.file_type() {
+                        Ok(t) if t.is_dir() => walk(&e.path()),
+                        _ => e.metadata().map(|m| m.len()).unwrap_or(0),
+                    })
+                    .sum()
+            })
+            .unwrap_or(0)
+    }
+    let cards = fs::read_dir(cache).map(|it| it.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).count()).unwrap_or(0);
+    (walk(cache), cards)
+}
+
+pub fn clear_cache(conn: &Connection, cache: &Path) -> rusqlite::Result<u64> {
+    let (before, _) = cache_size(cache);
+    if let Ok(entries) = fs::read_dir(cache) {
+        for dir in entries.filter_map(|e| e.ok()) {
+            let _ = fs::remove_dir_all(dir.path());
+        }
+    }
+    conn.execute(
+        "UPDATE card SET stage = CASE WHEN status IN ('in_deck','deferred') THEN 'new' ELSE 'meta' END, frames = 0
+         WHERE stage IN ('frames','embedded')",
+        [],
+    )?;
+    let (after, _) = cache_size(cache);
+    Ok(before.saturating_sub(after))
+}
+
 const KEEP_PLACED_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
 pub fn tidy(conn: &Connection, cache: &Path, now: i64) -> rusqlite::Result<(usize, usize)> {
@@ -467,6 +500,30 @@ mod tests {
         assert!(meta.duration_ms > 0);
         assert_eq!(meta.frames.len(), FRAMES as usize);
         assert!(meta.width > 0 && meta.height > 0);
+    }
+
+    #[test]
+    fn clear_cache_empties_dir_and_redevelops_deck() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("cache");
+        let conn = Connection::open_in_memory().unwrap();
+        db::init(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO card(id, deck_path, file_name, size, mtime, position, stage, frames, status) VALUES
+               (1, 'D', 'deck.mp4', 1, 0, 1, 'embedded', 8, 'in_deck'),
+               (2, 'D', 'placed.mp4', 1, 0, 2, 'frames', 8, 'placed'),
+               (3, 'D', 'broken.mp4', 1, 0, 3, 'broken', 0, 'in_deck');",
+        )
+        .unwrap();
+        for id in ["1", "2"] {
+            fs::create_dir_all(cache.join(id)).unwrap();
+            fs::write(cache.join(id).join("0.jpg"), [0u8; 100]).unwrap();
+        }
+        assert_eq!(cache_size(&cache), (200, 2));
+        assert_eq!(clear_cache(&conn, &cache).unwrap(), 200);
+        assert_eq!(cache_size(&cache), (0, 0));
+        let stage = |id: i64| conn.query_row("SELECT stage FROM card WHERE id = ?1", params![id], |r| r.get::<_, String>(0)).unwrap();
+        assert_eq!((stage(1).as_str(), stage(2).as_str(), stage(3).as_str()), ("new", "meta", "broken"));
     }
 
     #[test]

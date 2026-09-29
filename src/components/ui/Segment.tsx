@@ -5,14 +5,16 @@ export function Segment<T extends string>({
   options,
   value,
   onChange,
+  className = "bg-raised",
 }: {
+  className?: string;
   label: string;
   options: Option<T>[];
   value: T;
   onChange: (value: T) => void;
 }) {
   return (
-    <div role="radiogroup" aria-label={label} className="flex gap-1 rounded-full bg-raised p-1">
+    <div role="radiogroup" aria-label={label} className={`flex gap-1 rounded-full p-1 ${className}`}>
       {options.map((o) => {
         const on = o.value === value;
         return (

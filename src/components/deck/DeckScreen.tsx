@@ -1,5 +1,5 @@
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Copy, Folder, FolderOpen, History, LayoutGrid, Layers, Plus } from "lucide-react";
+import { Copy, Folder, FolderOpen, History, LayoutGrid, Layers, Plus, Settings } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { errorText, ipc, onCard, onDeckChanged, onDupesChanged, onPilesChanged, onProgress, type AppState, type Card, type DupeGroup, type DupeGroups, type DupeView, type GroupItem, type Method, type Move, type Pile } from "../../lib/ipc";
 import { isTypingChar, keyOf } from "../../lib/keys";
@@ -53,10 +53,12 @@ export function DeckScreen({
   initial,
   onPiles,
   onJournal,
+  onSettings,
 }: {
   initial: AppState;
   onPiles: () => void;
   onJournal: () => void;
+  onSettings: () => void;
 }) {
   const [cards, setCards] = useState<Card[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -538,6 +540,11 @@ export function DeckScreen({
       onJournal();
       return;
     }
+    if (e.ctrlKey && e.code === "Comma") {
+      e.preventDefault();
+      onSettings();
+      return;
+    }
     if (mode === "dupes") return;
     if (e.ctrlKey && e.code === "KeyE") {
       e.preventDefault();
@@ -690,6 +697,9 @@ export function DeckScreen({
             </IconButton>
             <IconButton label="Стопки" hint="Стопки и клавиши — Ctrl K" onClick={onPiles}>
               <Folder size={18} strokeWidth={1.5} />
+            </IconButton>
+            <IconButton label="Настройки" hint="Настройки — Ctrl ," onClick={onSettings}>
+              <Settings size={18} strokeWidth={1.5} />
             </IconButton>
           </>
         }

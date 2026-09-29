@@ -292,6 +292,26 @@ pub fn journal_stats(state: State<AppState>) -> AppResult<JournalStats> {
     Ok(JournalStats { moves, cards, hinted })
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheInfo {
+    bytes: u64,
+    cards: usize,
+}
+
+#[tauri::command]
+pub fn cache_info(state: State<AppState>) -> CacheInfo {
+    let (bytes, cards) = crate::develop::cache_size(&state.data_dir.join("cache"));
+    CacheInfo { bytes, cards }
+}
+
+#[tauri::command]
+pub fn clear_cache(state: State<AppState>) -> AppResult<u64> {
+    let freed = crate::develop::clear_cache(&state.conn(), &state.data_dir.join("cache"))?;
+    state.wake.store(true, Ordering::Relaxed);
+    Ok(freed)
+}
+
 #[tauri::command]
 pub fn create_pile(state: State<AppState>, name: String) -> AppResult<Vec<PileView>> {
     let conn = state.conn();

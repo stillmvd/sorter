@@ -1,10 +1,10 @@
 import { openPath } from "@tauri-apps/plugin-opener";
-import { ChevronLeft, FolderOpen, Pencil, Plus } from "lucide-react";
+import { FolderOpen, Pencil, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { errorText, ipc, onPilesChanged, type Pile } from "../../lib/ipc";
 import { keyOf, PILE_KEYS } from "../../lib/keys";
 import { Button } from "../ui/Button";
-import { Heading } from "../ui/PageHeader";
+import { BackButton, Heading } from "../ui/PageHeader";
 
 const MIN_EXAMPLES = 3;
 
@@ -106,14 +106,7 @@ export function PilesScreen({ table, onBack }: { table: string; onBack: () => vo
     <main className="mx-2 mb-2 flex min-h-0 flex-1 flex-col gap-[22px] rounded-[28px] bg-cosmic px-10 py-7">
       <div className="flex items-end gap-3">
         <div className="flex flex-1 flex-col gap-3.5">
-          <button
-            type="button"
-            onClick={onBack}
-            title="К колоде — Esc"
-            className="flex h-7 items-center gap-2 self-start rounded-full bg-raised px-3 text-xs font-medium text-dim transition-colors duration-200 ease-trail hover:bg-strong [&_svg]:h-3.5 [&_svg]:w-3.5 [&_svg]:text-fg"
-          >
-            <ChevronLeft strokeWidth={1.5} />К колоде
-          </button>
+          <BackButton onClick={onBack} />
           <Heading light="Стопки" bold="и клавиши" />
           <p className="m-0 max-w-[80ch] text-[15px] leading-[1.55] text-dim">
             Стол: {table} · каждая стопка — папка внутри. Клавиша кладёт карту сразу, без поиска.

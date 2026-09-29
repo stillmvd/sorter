@@ -69,6 +69,8 @@ pub fn run() {
             commands::undo_since,
             commands::journal,
             commands::journal_stats,
+            commands::cache_info,
+            commands::clear_cache,
             commands::hints,
             commands::create_pile,
             commands::rename_pile,

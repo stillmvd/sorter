@@ -1,3 +1,4 @@
+import { ChevronLeft } from "lucide-react";
 import type { ReactNode } from "react";
 
 export function Tag({ icon, children }: { icon?: ReactNode; children: ReactNode }) {
@@ -41,5 +42,18 @@ export function PageHeader({
       </div>
       {actions}
     </div>
+  );
+}
+
+export function BackButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="К колоде — Esc"
+      className="flex h-7 items-center gap-2 self-start rounded-full bg-raised px-3 text-xs font-medium text-dim transition-colors duration-200 ease-trail hover:bg-strong [&_svg]:h-3.5 [&_svg]:w-3.5 [&_svg]:text-fg"
+    >
+      <ChevronLeft strokeWidth={1.5} />К колоде
+    </button>
   );
 }

@@ -4,6 +4,7 @@ import { DeckScreen } from "./components/deck/DeckScreen";
 import { Develop } from "./components/screens/Develop";
 import { JournalScreen } from "./components/screens/Journal";
 import { PilesScreen } from "./components/screens/Piles";
+import { SettingsScreen } from "./components/screens/Settings";
 import { Start } from "./components/screens/Start";
 import { errorText, ipc, type AppState } from "./lib/ipc";
 
@@ -12,7 +13,7 @@ export default function App() {
   const [failure, setFailure] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
   const [developView, setDevelopView] = useState(false);
-  const [screen, setScreen] = useState<"deck" | "piles" | "journal">("deck");
+  const [screen, setScreen] = useState<"deck" | "piles" | "journal" | "settings">("deck");
 
   const reload = useCallback(async () => {
     try {
@@ -60,8 +61,16 @@ export default function App() {
       {state && !showStart && ready && !developView && screen === "journal" && (
         <JournalScreen cacheDir={state.cacheDir} deckPath={state.settings.deck_path ?? ""} onBack={back} />
       )}
+      {state && !showStart && ready && !developView && screen === "settings" && (
+        <SettingsScreen state={state} onChange={reload} onBack={back} />
+      )}
       {state && !showStart && ready && !developView && screen === "deck" && (
-        <DeckScreen initial={state} onPiles={() => setScreen("piles")} onJournal={() => setScreen("journal")} />
+        <DeckScreen
+          initial={state}
+          onPiles={() => setScreen("piles")}
+          onJournal={() => setScreen("journal")}
+          onSettings={() => setScreen("settings")}
+        />
       )}
     </div>
   );

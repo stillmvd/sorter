@@ -1,9 +1,9 @@
-import { ArrowRight, ChevronLeft, Trash2, Undo2 } from "lucide-react";
+import { ArrowRight, Trash2, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorText, ipc, media, type Move, type Pile } from "../../lib/ipc";
 import { cardsWord, plural } from "../../lib/plural";
 import { Button } from "../ui/Button";
-import { Heading } from "../ui/PageHeader";
+import { BackButton, Heading } from "../ui/PageHeader";
 
 const PAGE = 60;
 
@@ -119,14 +119,7 @@ export function JournalScreen({ cacheDir, deckPath, onBack }: { cacheDir: string
     <main className="mx-2 mb-2 flex min-h-0 flex-1 flex-col gap-[22px] rounded-[28px] bg-cosmic px-10 py-7">
       <div className="flex items-end gap-3">
         <div className="flex flex-1 flex-col gap-3.5">
-          <button
-            type="button"
-            onClick={onBack}
-            title="К колоде — Esc"
-            className="flex h-7 items-center gap-2 self-start rounded-full bg-raised px-3 text-xs font-medium text-dim transition-colors duration-200 ease-trail hover:bg-strong [&_svg]:h-3.5 [&_svg]:w-3.5 [&_svg]:text-fg"
-          >
-            <ChevronLeft strokeWidth={1.5} />К колоде
-          </button>
+          <BackButton onClick={onBack} />
           <Heading light="Журнал," bold={`${total} ${plural(total, "ход", "хода", "ходов")}`} />
           <p className="m-0 max-w-[80ch] text-[15px] leading-[1.55] text-dim">
             {notice ?? `Любой ход можно забрать: карта вернётся в колоду, файл — в ${deckPath}.`}
