@@ -136,7 +136,7 @@ Tauri-проект в корне `Sorter/`: фронт `src/`, Rust `src-tauri/s
 - [X] T050 Тексты всех ошибок и пустых состояний на «ты» с причиной и следующим шагом (FR-030), проверка контрастов обеих тем
 - [X] T051 Производительность: SC-002 (смена карты ≤ 0,3 с p95 — логирование в dev), SC-004 (первые 20 карт ≤ 15 с) на `G:\vk videos`
 - [X] T052 Проверка SC-007: Resource Monitor → сеть у `sorter.exe` всю сессию
-- [ ] T053 Релиз `pnpm tauri build --no-bundle` → `src-tauri/target/release/sorter.exe`, прогон всех сценариев quickstart.md на копии колоды, README без упоминаний ассистента
+- [X] T053 (перенесено в фичу 003: релиз установщиком — `specs/003-installer-updates/tasks.md` T028–T029) Релиз `pnpm tauri build --no-bundle` → `src-tauri/target/release/sorter.exe`, прогон всех сценариев quickstart.md на копии колоды, README без упоминаний ассистента
 
 ---
 
