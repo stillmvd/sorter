@@ -13,3 +13,8 @@ CLAUDE.md
 HANDOFF.md
 src-tauri/resources/*.dll
 src-tauri/resources/*.onnx
+
+brand/logo/png/
+brand/concepts/__pycache__/
+brand/concepts/*-sheet.*
+brand/concepts/logo-page.html

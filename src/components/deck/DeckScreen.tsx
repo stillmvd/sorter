@@ -7,6 +7,7 @@ import { cardsWord, plural } from "../../lib/plural";
 import { useHints } from "../../lib/useHints";
 import { useDupes } from "../../lib/useDupes";
 import { HintBox } from "./HintBox";
+import { Mark } from "../ui/Mark";
 import { DupeBadge } from "./DupeBadge";
 import { play } from "../../lib/sound";
 import { pressToDrag } from "../fx/Drag";
@@ -662,6 +663,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
         />
       ) : empty ? (
         <div className="flex min-h-0 flex-1 flex-col items-start justify-center gap-4">
+          <Mark size={72} />
           <Heading light="Колода" bold="пуста" size={56} />
           <p className="m-0 max-w-[60ch] text-[15px] leading-[1.55] text-dim">
             Все видео лежат по стопкам. Новые видео из папки колоды появятся здесь при следующем запуске.
