@@ -28,6 +28,32 @@ fn info(path: &Path) -> Option<FileInfo> {
     Some(FileInfo { path: path.to_string_lossy().into_owned(), size: meta.len() as i64, mtime })
 }
 
+pub fn repath(conn: &Connection, from: &Path, to: &Path) -> rusqlite::Result<()> {
+    let (from, to) = (from.to_string_lossy(), to.to_string_lossy());
+    conn.execute("UPDATE OR REPLACE fingerprint SET path = ?2 WHERE path = ?1", params![from, to])?;
+    for table in ["dupe", "dupe_dismissed"] {
+        conn.execute(&format!("UPDATE OR REPLACE {table} SET a = ?2 WHERE a = ?1"), params![from, to])?;
+        conn.execute(&format!("UPDATE OR REPLACE {table} SET b = ?2 WHERE b = ?1"), params![from, to])?;
+    }
+    conn.execute("UPDATE OR REPLACE dupe SET a = b, b = a, offset_ms = -offset_ms WHERE a > b", [])?;
+    conn.execute("UPDATE OR REPLACE dupe_dismissed SET a = b, b = a WHERE a > b", [])?;
+    Ok(())
+}
+
+pub fn forget_missing(conn: &Connection) -> rusqlite::Result<usize> {
+    let gone: Vec<String> = conn
+        .prepare("SELECT path FROM fingerprint")?
+        .query_map([], |r| r.get::<_, String>(0))?
+        .filter_map(|r| r.ok())
+        .filter(|p| !Path::new(p).exists())
+        .collect();
+    for p in &gone {
+        conn.execute("DELETE FROM fingerprint WHERE path = ?1", params![p])?;
+        conn.execute("DELETE FROM dupe WHERE a = ?1 OR b = ?1", params![p])?;
+    }
+    Ok(gone.len())
+}
+
 pub fn files(conn: &Connection) -> rusqlite::Result<Vec<FileInfo>> {
     let deck = db::get_setting(conn, "deck_path")?.unwrap_or_default();
     let table = db::get_setting(conn, "table_path")?.unwrap_or_default();

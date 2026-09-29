@@ -372,6 +372,7 @@ pub fn tidy(conn: &Connection, cache: &Path, now: i64) -> rusqlite::Result<(usiz
     for id in &missing {
         conn.execute("DELETE FROM example WHERE id = ?1", params![id])?;
     }
+    dupes::forget_missing(conn)?;
     Ok((dirs, missing.len()))
 }
 

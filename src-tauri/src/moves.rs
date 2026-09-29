@@ -365,6 +365,9 @@ pub fn place_with(
             "UPDATE card SET status = 'placed', pile_id = ?2, current_path = ?3 WHERE id = ?1",
             params![it.card_id, pile_id, it.to.as_ref().map(|p| p.to_string_lossy().into_owned())],
         )?;
+        if let Some(to) = &it.to {
+            crate::dupes::repath(conn, &it.from, to)?;
+        }
     }
     set_state(conn, move_id, "done", None)?;
     load_move(conn, move_id)
@@ -388,6 +391,9 @@ fn return_cards(conn: &Connection, move_id: i64, items: &[Item]) -> AppResult<()
              stage = CASE WHEN stage = 'meta' THEN 'new' ELSE stage END WHERE id = ?1",
             params![it.card_id, top - (items.len() - i) as f64],
         )?;
+        if let Some(to) = &it.to {
+            crate::dupes::repath(conn, to, &it.from)?;
+        }
         conn.execute("DELETE FROM example WHERE card_id = ?1", params![it.card_id])?;
     }
     set_state(conn, move_id, "undone", None)
@@ -556,6 +562,28 @@ mod tests {
         assert!(e.deck.join("a.mp4").exists());
         assert!(!e.table.join("Мемы/a.mp4").exists());
         assert_eq!(status(&e, c), "in_deck");
+    }
+
+    #[test]
+    fn dupes_follow_the_file() {
+        let mut e = env();
+        let c = card(&e, "a.mp4", b"aaa");
+        let (a, z) = (e.deck.join("a.mp4").to_string_lossy().into_owned(), e.deck.join("z.mp4").to_string_lossy().into_owned());
+        e.conn.execute("INSERT INTO fingerprint(path, size, mtime, state) VALUES (?1, 3, 0, 'ok')", params![a]).unwrap();
+        e.conn
+            .execute("INSERT INTO dupe(a, b, kind, confidence, offset_ms) VALUES (?1, ?2, 'same', 90, 500)", params![a, z])
+            .unwrap();
+        let pair = |e: &Env| -> (String, String, i64) {
+            e.conn.query_row("SELECT a, b, offset_ms FROM dupe", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap()
+        };
+        let m = place(&mut e.conn, &[c], e.pile, "key").unwrap();
+        let moved = e.table.join("Мемы").join("a.mp4").to_string_lossy().into_owned();
+        let (pa, pb, off) = pair(&e);
+        assert_eq!((pa.as_str(), pb.as_str(), off), (z.as_str(), moved.as_str(), -500));
+        let path: String = e.conn.query_row("SELECT path FROM fingerprint", [], |r| r.get(0)).unwrap();
+        assert_eq!(path, moved);
+        undo(&e.conn, m.id).unwrap();
+        assert_eq!(pair(&e), (a, z, 500));
     }
 
     #[test]
