@@ -216,6 +216,15 @@ fn copy_of(conn: &Connection, path: &str, deck: &str) -> rusqlite::Result<(Copy,
         Some((id, w, h, d, t, pos)) => (Some(id), w, h, d, t, pos),
         None => (None, None, None, None, None, f64::MAX),
     };
+    let (w, h, d) = match (w, h, d) {
+        (Some(w), Some(h), Some(d)) => (Some(w), Some(h), Some(d)),
+        _ => conn
+            .query_row("SELECT width, height, duration_ms FROM fingerprint WHERE path = ?1 AND state = 'ok'", params![path], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .optional()?
+            .unwrap_or((w, h, d)),
+    };
     let bitrate = d.filter(|d| *d > 0).map(|d| size * 8 * 1000 / d);
     let copy = Copy {
         card_id: if in_deck { id } else { None },

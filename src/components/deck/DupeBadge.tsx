@@ -8,6 +8,8 @@ const clock = (ms: number) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
 
+const span = (from: number, to: number) => `${clock(from)}\u2060–\u2060${clock(to)}`;
+
 function kindText(dupe: DupeView, mine: number | null) {
   if (dupe.kind === "exact") return "точная копия";
   if (dupe.kind === "crop") return "кадрирована";
@@ -16,8 +18,8 @@ function kindText(dupe: DupeView, mine: number | null) {
   const offset = dupe.offsetMs ?? 0;
   if (mine === null || theirs === null) return "обрезка";
   return theirs <= mine
-    ? `обрезка: ${clock(offset)}–${clock(offset + theirs)} из ${clock(mine)}`
-    : `эта карта — обрезка: ${clock(-offset)}–${clock(-offset + mine)} из ${clock(theirs)}`;
+    ? `обрезка: ${span(offset, offset + theirs)} из\u00a0${clock(mine)}`
+    : `эта карта — обрезка: ${span(-offset, -offset + mine)} из\u00a0${clock(theirs)}`;
 }
 
 const mb = (b: number) => `${(b / 1024 ** 2).toFixed(1).replace(".", ",")} МБ`;
