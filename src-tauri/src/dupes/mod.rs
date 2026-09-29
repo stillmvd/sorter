@@ -1,3 +1,6 @@
+pub mod matcher;
+pub mod print;
+
 use crate::db;
 use crate::deck;
 use crate::error::AppResult;
