@@ -67,7 +67,7 @@ function Face({
       .playable(card.id)
       .then((path) => {
         fixing.current = "done";
-        setSrc(media(path));
+        setSrc(`${media(path)}?v=${Date.now()}`);
       })
       .catch(() => brokenRef.current());
   };

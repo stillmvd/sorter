@@ -45,7 +45,12 @@ fn inside(path: &Path, root: &Path) -> bool {
 }
 
 fn reply(status: StatusCode) -> Response<Vec<u8>> {
-    Response::builder().status(status).header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*").body(Vec::new()).unwrap()
+    Response::builder()
+        .status(status)
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(Vec::new())
+        .unwrap()
 }
 
 pub fn serve(app: &AppHandle, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
@@ -72,7 +77,8 @@ pub fn serve(app: &AppHandle, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
     let builder = Response::builder()
         .header(header::CONTENT_TYPE, mime(&path))
         .header(header::ACCEPT_RANGES, "bytes")
-        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .header(header::CACHE_CONTROL, "no-store");
     match range {
         Some((start, end)) if start < len => {
             let end = end.min(start + CHUNK - 1);

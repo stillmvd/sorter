@@ -87,7 +87,7 @@ export const Tile = memo(function Tile({
           onError={() => {
             if (fixed.current) return;
             fixed.current = true;
-            void ipc.playable(card.id).then((p) => setSrc(media(p)), () => undefined);
+            void ipc.playable(card.id).then((p) => setSrc(`${media(p)}?v=${Date.now()}`), () => undefined);
           }}
           onLoadedMetadata={seek}
           onSeeked={() => {
