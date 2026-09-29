@@ -249,6 +249,7 @@ export function DeckScreen({
         setPiles(r.piles);
         setLast(r.move);
         if (cardsRef.current.length === 0) play("empty");
+        void ipc.getState().then((st) => setCounts(st.deck));
       } catch (e) {
         play("error");
         setCards((cs) => [card, ...cs.filter((c) => c.id !== card.id)]);
@@ -285,6 +286,7 @@ export function DeckScreen({
         setPiles(r.piles);
         setLast(r.move);
         if (sheetRef.current.length === 0) play("empty");
+        void ipc.getState().then((st) => setCounts(st.deck));
       } catch (e) {
         failed = true;
         play("error");
@@ -315,6 +317,7 @@ export function DeckScreen({
         const r = await ipc.trashCopies(copies.map((d) => d.path));
         setPiles(r.piles);
         setLast(r.move);
+        void ipc.getState().then((st) => setCounts(st.deck));
       } catch (e) {
         play("error");
         setCounts((c) => ({ ...c, left: c.left + ids.length, placed: c.placed - ids.length }));
@@ -458,7 +461,7 @@ export function DeckScreen({
       play("undo");
       const back = r.cards;
       setCards((cs) => [...back, ...cs.filter((c) => !back.some((b) => b.id === c.id))]);
-      setCounts((c) => ({ ...c, left: c.left + back.length, placed: c.placed - back.length }));
+      void ipc.getState().then((st) => setCounts(st.deck));
       setPiles(r.piles);
       if (mode === "table") {
         await loadSheet();

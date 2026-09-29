@@ -230,8 +230,20 @@ pub mod mf {
     const AUDIO: u32 = MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32;
     const EOS: u32 = MF_SOURCE_READERF_ENDOFSTREAM.0 as u32;
 
-    thread_local! {
-        static DEVICE: std::mem::ManuallyDrop<Option<ID3D11Device>> = std::mem::ManuallyDrop::new(device().ok());
+    struct Shared(Option<ID3D11Device>);
+    unsafe impl Send for Shared {}
+    unsafe impl Sync for Shared {}
+    static DEVICE: std::sync::OnceLock<Shared> = std::sync::OnceLock::new();
+
+    pub fn hardware(attrs: &IMFAttributes) -> windows::core::Result<bool> {
+        if let Some(manager) = DEVICE.get_or_init(|| Shared(device().ok())).0.as_ref().and_then(|d| manager(d).ok()) {
+            unsafe {
+                attrs.SetUnknown(&MF_SOURCE_READER_D3D_MANAGER, &manager)?;
+                attrs.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)?;
+            }
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     fn device() -> windows::core::Result<ID3D11Device> {
@@ -264,7 +276,7 @@ pub mod mf {
         }
     }
 
-    fn frame(sample: &IMFSample, w: u32, h: u32) -> windows::core::Result<RgbImage> {
+    pub fn frame(sample: &IMFSample, w: u32, h: u32) -> windows::core::Result<RgbImage> {
         unsafe {
             let buffer = sample.ConvertToContiguousBuffer()?;
             let mut img = RgbImage::new(w, h);
@@ -316,10 +328,7 @@ pub mod mf {
             MFCreateAttributes(&mut attrs, 3)?;
             let attrs = attrs.unwrap();
             attrs.SetUINT32(&MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, 1)?;
-            if let Some(manager) = DEVICE.with(|d| d.as_ref().and_then(|d| manager(d).ok())) {
-                attrs.SetUnknown(&MF_SOURCE_READER_D3D_MANAGER, &manager)?;
-                attrs.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)?;
-            }
+            hardware(&attrs)?;
             let url = HSTRING::from(path.as_os_str());
             let reader = MFCreateSourceReaderFromURL(&url, &attrs)?;
             reader.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false)?;

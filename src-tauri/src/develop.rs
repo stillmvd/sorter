@@ -34,7 +34,7 @@ struct Progress {
 #[cfg(windows)]
 mod mf {
     use super::{Meta, FRAMES, THUMB};
-    use image::{imageops, RgbImage};
+    use image::imageops;
     use std::path::Path;
     use windows::core::{GUID, HSTRING};
     use windows::Win32::Media::MediaFoundation::*;
@@ -53,9 +53,10 @@ mod mf {
     pub fn read(path: &Path) -> windows::core::Result<Meta> {
         unsafe {
             let mut attrs = None;
-            MFCreateAttributes(&mut attrs, 1)?;
+            MFCreateAttributes(&mut attrs, 3)?;
             let attrs = attrs.unwrap();
             attrs.SetUINT32(&MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, 1)?;
+            let hw = crate::dupes::print::mf::hardware(&attrs)?;
             let reader = MFCreateSourceReaderFromURL(&HSTRING::from(path.as_os_str()), &attrs)?;
             reader.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false)?;
             reader.SetStreamSelection(VIDEO, true)?;
@@ -71,6 +72,7 @@ mod mf {
             let scale = (THUMB as f32 / nw.max(nh).max(1) as f32).min(1.0);
             let tw = ((nw as f32 * scale).round() as u32).max(2) & !1;
             let th = ((nh as f32 * scale).round() as u32).max(2) & !1;
+            let (tw, th) = if hw && (rotation == 90 || rotation == 270) { (th, tw) } else { (tw, th) };
             wanted.SetUINT64(&MF_MT_FRAME_SIZE, (tw as u64) << 32 | th as u64)?;
             if reader.SetCurrentMediaType(VIDEO, None, &wanted).is_err() {
                 wanted.DeleteItem(&MF_MT_FRAME_SIZE)?;
@@ -79,7 +81,6 @@ mod mf {
             let current = reader.GetCurrentMediaType(VIDEO)?;
             let size = current.GetUINT64(&MF_MT_FRAME_SIZE)?;
             let (w, h) = ((size >> 32) as u32, (size & 0xFFFF_FFFF) as u32);
-            let stride = current.GetUINT32(&MF_MT_DEFAULT_STRIDE).map(|s| s as i32).unwrap_or((w * 4) as i32);
 
             let duration = reader
                 .GetPresentationAttribute(MF_SOURCE_READER_MEDIASOURCE.0 as u32, &MF_PD_DURATION)
@@ -107,22 +108,7 @@ mod mf {
                     }
                 }
                 let Some(sample) = sample else { break };
-                let buffer = sample.ConvertToContiguousBuffer()?;
-                let mut ptr = std::ptr::null_mut();
-                let mut len = 0u32;
-                buffer.Lock(&mut ptr, None, Some(&mut len))?;
-                let data = std::slice::from_raw_parts(ptr, len as usize);
-                let abs = stride.unsigned_abs() as usize;
-                let mut raw = Vec::with_capacity(w as usize * h as usize * 3);
-                for y in 0..h as usize {
-                    let row = if stride < 0 { h as usize - 1 - y } else { y };
-                    let start = row * abs;
-                    let Some(line) = data.get(start..start + w as usize * 4) else { break };
-                    raw.extend(line.chunks_exact(4).flat_map(|p| [p[2], p[1], p[0]]));
-                }
-                buffer.Unlock()?;
-                raw.resize(w as usize * h as usize * 3, 0);
-                let img = RgbImage::from_raw(w, h, raw).unwrap();
+                let img = crate::dupes::print::mf::frame(&sample, w, h)?;
                 let mut small = if w.max(h) > THUMB {
                     let scale = THUMB as f32 / w.max(h) as f32;
                     imageops::resize(
@@ -134,7 +120,7 @@ mod mf {
                 } else {
                     img
                 };
-                small = match rotation {
+                small = match if hw { 0 } else { rotation } {
                     90 => imageops::rotate90(&small),
                     180 => imageops::rotate180(&small),
                     270 => imageops::rotate270(&small),
@@ -570,5 +556,18 @@ mod tests {
             ok += develop_batch(&cache, chunk).iter().filter(|r| r.is_some()).count();
         }
         println!("ИТОГО {ok}/{} карт, {} потока: {} ms", jobs.len(), workers(), total.elapsed().as_millis());
+    }
+
+    #[test]
+    #[ignore]
+    fn bench_each_card() {
+        mf::start();
+        let Ok(dir) = fs::read_dir(r"G:\sorter-test\deck") else { return };
+        let cache = std::env::temp_dir().join("sorter-bench");
+        for (i, e) in dir.filter_map(|e| e.ok()).enumerate() {
+            let t = Instant::now();
+            let ok = develop_files(&cache, i as i64, &e.path()).is_some();
+            println!("КАРТА {} ms {ok} {}", t.elapsed().as_millis(), e.path().display());
+        }
     }
 }
