@@ -96,8 +96,8 @@
 
 ## Phase 7: Polish & Release
 
-- [ ] T026 [P] `.github/workflows/release.yml`: тег `v*`, `windows-latest`, pnpm, Rust cache, шаг `scripts/fetch-runtime.ps1`, `tauri-apps/tauri-action@v1` (`tagName: v__VERSION__`, `releaseName: Sorter __VERSION__`, `releaseBody` — «Что нового» на русском, `uploadUpdaterJson`, `updaterJsonPreferNsis`, секрет `TAURI_SIGNING_PRIVATE_KEY`)
-- [ ] T027 [P] `README.md`: что делает Sorter, установка, обновления, пункт Проводника, где данные; без упоминаний ассистента
+- [X] T026 [P] `.github/workflows/release.yml`: тег `v*`, `windows-latest`, pnpm, Rust cache, шаг `scripts/fetch-runtime.ps1`, `tauri-apps/tauri-action@v1` (`tagName: v__VERSION__`, `releaseName: Sorter __VERSION__`, `releaseBody` — «Что нового» на русском, `uploadUpdaterJson`, `updaterJsonPreferNsis`, секрет `TAURI_SIGNING_PRIVATE_KEY`)
+- [X] T027 [P] `README.md`: что делает Sorter, установка, обновления, пункт Проводника, где данные; без упоминаний ассистента
 - [ ] T028 Предложить пользователю: создать публичный `stillmvd/sorter`, запушить, добавить секрет, тег `v1.0.0` — выполнять по шагам только после явного «да» (бывший T053 фичи 001)
 - [ ] T029 После релиза: установщик со страницы релиза на чистую установку, `latest.json` доступен, приложение видит «последняя версия»; обновить `HANDOFF.md`
 
