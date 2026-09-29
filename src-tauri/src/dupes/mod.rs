@@ -8,7 +8,7 @@ use crate::error::AppResult;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -355,8 +355,153 @@ mod tests {
 
         let a = deck.join("a.mp4").to_string_lossy().into_owned();
         let b = deck.join("b.mp4").to_string_lossy().into_owned();
+        let g = groups(&conn).unwrap();
+        assert_eq!((g.groups.len(), g.groups[0].items.len(), g.groups[0].pairs.len()), (1, 3, 3));
+        assert_eq!((g.groups[0].items[0].best, g.groups[0].items[0].place), (true, "pile"));
+        assert_eq!((g.printed, g.total), (0, 5));
+
         dismiss(&conn, &b, &a).unwrap();
         assert!(!refresh_exact(&conn).unwrap());
         assert_eq!(dupes_for(&conn, 1).unwrap().len(), 1);
+        let g = groups(&conn).unwrap();
+        assert_eq!((g.groups.len(), g.groups[0].items.len(), g.groups[0].pairs.len()), (1, 3, 2));
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupItem {
+    path: String,
+    #[serde(rename = "where")]
+    place: &'static str,
+    pile_name: Option<String>,
+    card_id: Option<i64>,
+    duration_ms: Option<i64>,
+    width: Option<i64>,
+    height: Option<i64>,
+    bitrate: Option<i64>,
+    size: i64,
+    best: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Group {
+    kind: String,
+    confidence: i64,
+    trim: Option<[i64; 3]>,
+    items: Vec<GroupItem>,
+    pairs: Vec<[String; 2]>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Groups {
+    groups: Vec<Group>,
+    printed: i64,
+    total: i64,
+}
+
+const GROUP_MIN: i64 = 50;
+
+pub fn groups(conn: &Connection) -> AppResult<Groups> {
+    let deck = db::get_setting(conn, "deck_path")?.unwrap_or_default();
+    let table = db::get_setting(conn, "table_path")?.unwrap_or_default();
+    let rows: Vec<(String, String, String, i64, Option<i64>)> = conn
+        .prepare("SELECT a, b, kind, confidence, offset_ms FROM dupe WHERE confidence >= ?1")?
+        .query_map(params![GROUP_MIN], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+        .collect::<Result<_, _>>()?;
+    let rows: Vec<_> = rows.into_iter().filter(|(a, b, ..)| Path::new(a).is_file() && Path::new(b).is_file()).collect();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut parent: Vec<usize> = Vec::new();
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    for (a, b, ..) in &rows {
+        for p in [a, b] {
+            if !index.contains_key(p) {
+                index.insert(p.clone(), parent.len());
+                parent.push(parent.len());
+            }
+        }
+        let (ra, rb) = (root(&mut parent, index[a]), root(&mut parent, index[b]));
+        parent[ra] = rb;
+    }
+    let roots: HashMap<String, usize> = index.iter().map(|(p, &i)| (p.clone(), root(&mut parent, i))).collect();
+    let mut members: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+    for (p, r) in &roots {
+        members.entry(*r).or_default().push(p.clone());
+    }
+    let mut out = Vec::new();
+    for (r, mut list) in members {
+        list.sort();
+        let edges: Vec<&(String, String, String, i64, Option<i64>)> = rows.iter().filter(|(a, ..)| roots[a] == r).collect();
+        let top = edges.iter().filter(|e| e.2 != "exact").max_by_key(|e| e.3).or_else(|| edges.iter().max_by_key(|e| e.3)).unwrap();
+        let mut copies = Vec::new();
+        for p in &list {
+            let (copy, w, h, d) = copy_of(conn, p, &deck)?;
+            copies.push((p.clone(), copy, w, h, d));
+        }
+        let best = (0..copies.len()).max_by(|&i, &j| {
+            if better(&copies[i].1, &copies[j].1) {
+                std::cmp::Ordering::Greater
+            } else if better(&copies[j].1, &copies[i].1) {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        });
+        let trim = (top.2 == "trim").then(|| {
+            let da = copies.iter().find(|c| c.0 == top.0).and_then(|c| c.4).unwrap_or(0);
+            let db = copies.iter().find(|c| c.0 == top.1).and_then(|c| c.4).unwrap_or(0);
+            let off = top.4.unwrap_or(0);
+            if db <= da { [off, off + db, da] } else { [-off, -off + da, db] }
+        });
+        let mut items: Vec<GroupItem> = copies
+            .into_iter()
+            .enumerate()
+            .map(|(i, (path, copy, width, height, duration_ms))| GroupItem {
+                pile_name: copy.in_pile.then(|| pile_of(Path::new(&path), &table)).flatten(),
+                place: if copy.in_pile { "pile" } else { "deck" },
+                card_id: copy.card_id,
+                duration_ms,
+                width,
+                height,
+                bitrate: Some(copy.bitrate).filter(|b| *b > 0),
+                size: fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0),
+                best: Some(i) == best,
+                path,
+            })
+            .collect();
+        items.sort_by_key(|i| !i.best);
+        out.push(Group {
+            kind: top.2.clone(),
+            confidence: edges.iter().map(|e| e.3).max().unwrap_or(0),
+            trim,
+            items,
+            pairs: edges.iter().map(|e| [e.0.clone(), e.1.clone()]).collect(),
+        });
+    }
+    out.sort_by_key(|g| (g.kind != "exact", -g.confidence));
+    let (printed, total) = printed(conn)?;
+    Ok(Groups { groups: out, printed, total })
+}
+
+fn pile_of(p: &Path, table: &str) -> Option<String> {
+    let dir = p.parent()?;
+    (dir.parent()? == Path::new(table)).then(|| dir.file_name().map(|n| n.to_string_lossy().into_owned())).flatten()
+}
+
+pub fn printed(conn: &Connection) -> rusqlite::Result<(i64, i64)> {
+    let known: HashMap<String, (i64, i64)> = conn
+        .prepare("SELECT path, size, mtime FROM fingerprint WHERE state != 'new'")?
+        .query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?
+        .collect::<Result<_, _>>()?;
+    let all = files(conn)?;
+    let done = all.iter().filter(|f| known.get(&f.path) == Some(&(f.size, f.mtime))).count();
+    Ok((done as i64, all.len() as i64))
 }

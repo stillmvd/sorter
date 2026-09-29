@@ -335,3 +335,8 @@ pub fn replace_copy(state: State<AppState>, card_id: i64, worse_path: String) ->
     let (_, t) = paths(&conn)?;
     Ok(Placed { mv, piles: piles::list(&conn, &t)? })
 }
+
+#[tauri::command]
+pub fn dupe_groups(state: State<AppState>) -> AppResult<dupes::Groups> {
+    dupes::groups(&state.conn())
+}

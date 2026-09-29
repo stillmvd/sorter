@@ -67,6 +67,7 @@ pub fn run() {
             commands::develop_control,
             commands::dupes_for,
             commands::dismiss_dupe,
+            commands::dupe_groups,
             commands::trash_copies,
             commands::replace_copy,
         ])

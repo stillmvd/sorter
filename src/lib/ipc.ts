@@ -56,6 +56,29 @@ export type Hints = { enabled: boolean; ready: boolean; examples: number; hints:
 
 export type DupeKind = "exact" | "same" | "trim" | "crop";
 
+export type GroupItem = {
+  path: string;
+  where: "deck" | "pile";
+  pileName: string | null;
+  cardId: number | null;
+  durationMs: number | null;
+  width: number | null;
+  height: number | null;
+  bitrate: number | null;
+  size: number;
+  best: boolean;
+};
+
+export type DupeGroup = {
+  kind: DupeKind;
+  confidence: number;
+  trim: [number, number, number] | null;
+  items: GroupItem[];
+  pairs: [string, string][];
+};
+
+export type DupeGroups = { groups: DupeGroup[]; printed: number; total: number };
+
 export type DupeView = {
   path: string;
   where: "deck" | "pile";
@@ -128,6 +151,7 @@ export const ipc = {
   hints: (cardIds: number[]) => invoke<Hints>("hints", { cardIds }),
   dupesFor: (cardId: number) => invoke<DupeView[]>("dupes_for", { cardId }),
   dismissDupe: (a: string, b: string) => invoke<void>("dismiss_dupe", { a, b }),
+  dupeGroups: () => invoke<DupeGroups>("dupe_groups"),
   trashCopies: (paths: string[]) => invoke<{ move: Move; piles: Pile[] }>("trash_copies", { paths }),
   replaceCopy: (cardId: number, worsePath: string) =>
     invoke<{ move: Move; piles: Pile[] }>("replace_copy", { cardId, worsePath }),

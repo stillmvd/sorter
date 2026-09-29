@@ -180,7 +180,7 @@ fn next(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<(i64, PathBuf)>
 
 fn progress(conn: &Connection, paused: bool) -> rusqlite::Result<Progress> {
     let deck = db::get_setting(conn, "deck_path")?.unwrap_or_default();
-    let printed = conn.query_row("SELECT COUNT(*) FROM fingerprint WHERE state != 'new'", [], |r| r.get(0))?;
+    let (printed, _) = dupes::printed(conn)?;
     conn.query_row(
         "SELECT SUM(stage != 'new'), COUNT(*) FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred')",
         params![deck],

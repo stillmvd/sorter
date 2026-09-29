@@ -1,9 +1,9 @@
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { FolderOpen, LayoutGrid, Layers, Plus } from "lucide-react";
+import { Copy, FolderOpen, LayoutGrid, Layers, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
-import { errorText, ipc, onCard, onDeckChanged, onPilesChanged, onProgress, type AppState, type Card, type DupeView, type Method, type Move, type Pile } from "../../lib/ipc";
+import { errorText, ipc, onCard, onDeckChanged, onDupesChanged, onPilesChanged, onProgress, type AppState, type Card, type DupeGroup, type DupeGroups, type DupeView, type GroupItem, type Method, type Move, type Pile } from "../../lib/ipc";
 import { isTypingChar, keyOf } from "../../lib/keys";
-import { cardsWord } from "../../lib/plural";
+import { cardsWord, plural } from "../../lib/plural";
 import { useHints } from "../../lib/useHints";
 import { useDupes } from "../../lib/useDupes";
 import { HintBox } from "./HintBox";
@@ -24,16 +24,20 @@ import { ContactSheet } from "../table/ContactSheet";
 import { Segment } from "../ui/Segment";
 import { PilesRow } from "./PilesRow";
 import { Compare } from "../dupes/Compare";
+import { DupesScreen, SURE, type Filter } from "../dupes/DupesScreen";
 
 const mb = (b: number) => `${(b / 1024 ** 2).toFixed(1).replace(".", ",")} МБ`;
 const date = (ms: number) => new Date(ms).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
 
-type Mode = "deck" | "table";
+type Mode = "deck" | "table" | "dupes";
 
-const MODES: { value: Mode; label: string; hint: string }[] = [
+const modes = (dupes: number): { value: Mode; label: string; hint: string }[] => [
   { value: "deck", label: "Колода", hint: "По одной карте — Ctrl 1" },
   { value: "table", label: "Стол", hint: "Пачкой — Ctrl 2" },
+  { value: "dupes", label: dupes ? `Дубли ${dupes}` : "Дубли", hint: "Все дубли разом — Ctrl 3" },
 ];
+
+const MODE_KEYS: Record<string, Mode> = { Digit1: "deck", Digit2: "table", Digit3: "dupes" };
 
 function rank(piles: Pile[], query: string) {
   const q = query.trim().toLowerCase();
@@ -61,7 +65,9 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
   const [zone, setZone] = useState(420);
   const [flights, setFlights] = useState<Flight[]>([]);
   const [developing, setDeveloping] = useState(initial.developing);
-  const [mode, setMode] = useState<Mode>(initial.settings.mode === "table" ? "table" : "deck");
+  const [mode, setMode] = useState<Mode>(initial.settings.mode === "table" || initial.settings.mode === "dupes" ? initial.settings.mode : "deck");
+  const [groups, setGroups] = useState<DupeGroups | null>(null);
+  const [filter, setFilter] = useState<Filter | null>(null);
   const [sheet, setSheet] = useState<Card[]>([]);
   const [sheetLoaded, setSheetLoaded] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
@@ -81,6 +87,53 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
   sheetRef.current = sheet;
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
+
+  const loadGroups = useCallback(async () => {
+    try {
+      setGroups(await ipc.dupeGroups());
+    } catch (e) {
+      setToast(errorText(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadGroups();
+    const off = onDupesChanged(() => void loadGroups());
+    return () => void off.then((f) => f());
+  }, [loadGroups]);
+
+  const trashPaths = useCallback(
+    async (paths: string[]) => {
+      if (!paths.length) return;
+      const trash = pilesRef.current.find((p) => p.isTrash);
+      play("trash");
+      if (trash) shake(trash.id);
+      try {
+        const r = await ipc.trashCopies(paths);
+        setPiles(r.piles);
+        setLast(r.move);
+        setCounts((await ipc.getState()).deck);
+      } catch (e) {
+        play("error");
+        setToast(errorText(e));
+      }
+      void loadGroups();
+    },
+    [loadGroups],
+  );
+
+  const dismissGroup = useCallback(
+    async (g: DupeGroup) => {
+      try {
+        for (const [a, b] of g.pairs) await ipc.dismissDupe(a, b);
+        play("defer");
+      } catch (e) {
+        setToast(errorText(e));
+      }
+      void loadGroups();
+    },
+    [loadGroups],
+  );
 
   const refill = useCallback(async () => {
     const fresh = await ipc.deckWindow(0, 30);
@@ -401,11 +454,12 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
       }
       const recent = await ipc.journal(null, 20);
       setLast(recent.find((m) => m.state === "done") ?? null);
+      void loadGroups();
     } catch (e) {
       play("error");
       setToast(errorText(e));
     }
-  }, [mode, loadSheet]);
+  }, [mode, loadSheet, loadGroups]);
 
   const defer = useCallback(async () => {
     const card = cardsRef.current[0];
@@ -454,9 +508,9 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
     const active = document.activeElement;
     const inSearch = active === search.current;
     const focus = mode === "deck" ? current : sheet.find((c) => selected.has(c.id));
-    if (e.ctrlKey && (e.code === "Digit1" || e.code === "Digit2")) {
+    if (e.ctrlKey && MODE_KEYS[e.code]) {
       e.preventDefault();
-      switchMode(e.code === "Digit1" ? "deck" : "table");
+      switchMode(MODE_KEYS[e.code]);
       return;
     }
     if (e.ctrlKey && e.code === "KeyZ") {
@@ -464,6 +518,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
       void undo();
       return;
     }
+    if (mode === "dupes") return;
     if (e.ctrlKey && e.code === "KeyE") {
       e.preventDefault();
       if (focus) void revealItemInDir(focus.path);
@@ -559,6 +614,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
   const number = counts.placed + 1;
   const empty = mode === "deck" ? loaded && !current : sheetLoaded && sheet.length === 0;
   const picked = sheet.reduce((n, c) => n + Number(selected.has(c.id)), 0);
+  const sure = groups?.groups.filter((g) => g.confidence >= SURE).length ?? 0;
 
   return (
     <main
@@ -566,7 +622,11 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
     >
       <PageHeader
         tag={
-          mode === "deck" ? (
+          mode === "dupes" ? (
+            <Tag icon={<Copy strokeWidth={1.5} />}>
+              Отпечатано {groups?.printed ?? 0} из {groups?.total ?? 0} · колода и все стопки
+            </Tag>
+          ) : mode === "deck" ? (
             <Tag icon={<Layers strokeWidth={1.5} />}>
               Разложено {counts.placed} из {counts.placed + counts.left}
               {developing.done < developing.total && ` · проявлено ${developing.done} из ${developing.total}`}
@@ -578,12 +638,29 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
             </Tag>
           )
         }
-        light={mode === "deck" ? "В колоде" : "На столе,"}
-        bold={mode === "deck" ? String(Math.max(counts.left, 0)) : picked ? `отмечено ${picked}` : cardsWord(sheet.length)}
-        actions={<Segment label="Режим" options={MODES} value={mode} onChange={switchMode} />}
+        light={mode === "dupes" ? "Дубли," : mode === "deck" ? "В колоде" : "На столе,"}
+        bold={
+          mode === "dupes"
+            ? `${sure} ${plural(sure, "группа", "группы", "групп")}`
+            : mode === "deck"
+              ? String(Math.max(counts.left, 0))
+              : picked
+                ? `отмечено ${picked}`
+                : cardsWord(sheet.length)
+        }
+        actions={<Segment label="Режим" options={modes(sure)} value={mode} onChange={switchMode} />}
       />
 
-      {empty ? (
+      {mode === "dupes" ? (
+        <DupesScreen
+          groups={groups?.groups ?? []}
+          filter={filter}
+          onFilter={setFilter}
+          onKeep={(_: GroupItem, drop: GroupItem[]) => void trashPaths(drop.map((d) => d.path))}
+          onDismiss={(g) => void dismissGroup(g)}
+          onTrashExact={(paths) => void trashPaths(paths)}
+        />
+      ) : empty ? (
         <div className="flex min-h-0 flex-1 flex-col items-start justify-center gap-4">
           <Heading light="Колода" bold="пуста" size={56} />
           <p className="m-0 max-w-[60ch] text-[15px] leading-[1.55] text-dim">
@@ -679,6 +756,8 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
         </div>
       )}
 
+      {mode !== "dupes" && (
+      <>
       <div className="flex items-center gap-3">
         {mode === "table" && picked > 0 ? (
           <span className="flex h-9 shrink-0 items-center rounded-full bg-fg px-3.5 text-[13px] font-bold text-ink">Отмечено {picked}</span>
@@ -737,6 +816,8 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
         dragOver={dragPile}
         onMenu={(pile, x, y) => setMenu({ pile, x, y })}
       />
+      </>
+      )}
 
       <Flights flights={flights} onDone={landed} />
       {menu && <PileMenu pile={menu.pile} x={menu.x} y={menu.y} onRemove={() => removePile(menu.pile)} onClose={closeMenu} />}
