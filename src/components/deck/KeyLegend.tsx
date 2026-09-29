@@ -18,6 +18,7 @@ const ROWS: { keys: string[]; label: string }[] = [
   { keys: ["Del"], label: "в корзину" },
   { keys: ["Tab"], label: "в конец колоды" },
   { keys: ["Ctrl", "Z"], label: "забрать ход — можно много раз" },
+  { keys: ["Ctrl", "K"], label: "стопки и клавиши" },
   { keys: ["Space"], label: "пауза — или клик по видео" },
   { keys: ["←", "→"], label: "кадр плёнки назад / вперёд" },
   { keys: ["M"], label: "звук" },

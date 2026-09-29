@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Titlebar } from "./components/Titlebar";
 import { DeckScreen } from "./components/deck/DeckScreen";
 import { Develop } from "./components/screens/Develop";
+import { PilesScreen } from "./components/screens/Piles";
 import { Start } from "./components/screens/Start";
 import { errorText, ipc, type AppState } from "./lib/ipc";
 
@@ -10,6 +11,7 @@ export default function App() {
   const [failure, setFailure] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
   const [developView, setDevelopView] = useState(false);
+  const [pilesView, setPilesView] = useState(false);
 
   const reload = useCallback(async () => {
     try {
@@ -49,7 +51,12 @@ export default function App() {
         />
       )}
       {state && !showStart && ready && developView && <Develop state={state} onDone={() => setDevelopView(false)} />}
-      {state && !showStart && ready && !developView && <DeckScreen initial={state} onReload={reload} />}
+      {state && !showStart && ready && !developView && pilesView && (
+        <PilesScreen table={state.settings.table_path ?? ""} onBack={() => void reload().then(() => setPilesView(false))} />
+      )}
+      {state && !showStart && ready && !developView && !pilesView && (
+        <DeckScreen initial={state} onReload={reload} onPiles={() => setPilesView(true)} />
+      )}
     </div>
   );
 }

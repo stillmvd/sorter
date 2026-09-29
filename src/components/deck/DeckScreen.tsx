@@ -1,5 +1,5 @@
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Copy, FolderOpen, LayoutGrid, Layers, Plus } from "lucide-react";
+import { Copy, Folder, FolderOpen, LayoutGrid, Layers, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { errorText, ipc, onCard, onDeckChanged, onDupesChanged, onPilesChanged, onProgress, type AppState, type Card, type DupeGroup, type DupeGroups, type DupeView, type GroupItem, type Method, type Move, type Pile } from "../../lib/ipc";
 import { isTypingChar, keyOf } from "../../lib/keys";
@@ -8,6 +8,7 @@ import { useHints } from "../../lib/useHints";
 import { useDupes } from "../../lib/useDupes";
 import { HintBox } from "./HintBox";
 import { Mark } from "../ui/Mark";
+import { IconButton } from "../ui/IconButton";
 import { DupeBadge } from "./DupeBadge";
 import { play } from "../../lib/sound";
 import { pressToDrag } from "../fx/Drag";
@@ -48,7 +49,7 @@ function rank(piles: Pile[], query: string) {
     .sort((a, b) => Number(!a.name.toLowerCase().startsWith(q)) - Number(!b.name.toLowerCase().startsWith(q)));
 }
 
-export function DeckScreen({ initial, onReload }: { initial: AppState; onReload: () => void }) {
+export function DeckScreen({ initial, onReload, onPiles }: { initial: AppState; onReload: () => void; onPiles: () => void }) {
   const [cards, setCards] = useState<Card[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [piles, setPiles] = useState(initial.piles);
@@ -519,6 +520,11 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
       void undo();
       return;
     }
+    if (e.ctrlKey && e.code === "KeyK") {
+      e.preventDefault();
+      onPiles();
+      return;
+    }
     if (mode === "dupes") return;
     if (e.ctrlKey && e.code === "KeyE") {
       e.preventDefault();
@@ -649,7 +655,14 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
                 ? `отмечено ${picked}`
                 : cardsWord(sheet.length)
         }
-        actions={<Segment label="Режим" options={modes(sure)} value={mode} onChange={switchMode} />}
+        actions={
+          <>
+            <Segment label="Режим" options={modes(sure)} value={mode} onChange={switchMode} />
+            <IconButton label="Стопки" hint="Стопки и клавиши — Ctrl K" onClick={onPiles}>
+              <Folder size={18} strokeWidth={1.5} />
+            </IconButton>
+          </>
+        }
       />
 
       {mode === "dupes" ? (
