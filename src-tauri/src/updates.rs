@@ -49,7 +49,11 @@ fn change(app: &AppHandle, f: impl FnOnce(&mut UpdateState)) {
 
 fn text(e: &Error) -> AppError {
     match e {
-        Error::Minisign(_) | Error::Base64(_) | Error::SignatureUtf8(_) => {
+        Error::Minisign(_)
+        | Error::Base64(_)
+        | Error::SignatureUtf8(_)
+        | Error::SignedVersionMismatch { .. }
+        | Error::MissingSignedVersion => {
             AppError::new("UPDATE_SIGNATURE", "Обновление отклонено: подпись не совпала. Попробую позже.")
         }
         Error::Reqwest(_) | Error::Network(_) => AppError::new("UPDATE_NET", "Не удалось проверить — нет сети. Попробую позже."),
@@ -114,7 +118,7 @@ pub async fn check(app: &AppHandle) {
         s.phase = "checking";
         s.error = None;
     });
-    let found = match app.updater() {
+    let found = match app.updater_builder().on_before_exit(|| {}).build() {
         Ok(updater) => updater.check().await,
         Err(e) => Err(e),
     };
@@ -229,7 +233,7 @@ pub async fn update_check(app: AppHandle) -> UpdateState {
 }
 
 #[tauri::command]
-pub fn update_install(app: AppHandle) -> AppResult<()> {
+pub async fn update_install(app: AppHandle) -> AppResult<()> {
     install(&app, true)
 }
 
@@ -241,6 +245,7 @@ mod tests {
     fn network_and_signature_errors_read_as_russian() {
         assert_eq!(text(&Error::Network("x".into())).code, "UPDATE_NET");
         assert_eq!(text(&Error::SignatureUtf8("x".into())).code, "UPDATE_SIGNATURE");
+        assert_eq!(text(&Error::MissingSignedVersion).code, "UPDATE_SIGNATURE");
         assert_eq!(text(&Error::ReleaseNotFound).code, "UPDATE_CHECK");
     }
 }
