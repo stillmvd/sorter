@@ -21,7 +21,8 @@
         "center": true,
         "decorations": false,
         "dragDropEnabled": false,
-        "visible": false
+        "visible": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,OptimizationHints,AutofillServerCommunication,MediaRouter,EdgeFeedback,msEdgeFeedback --disable-background-networking --disable-component-update --disable-domain-reliability --disable-sync --no-pings"
       }
     ],
     "security": {
