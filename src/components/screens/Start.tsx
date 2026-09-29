@@ -28,7 +28,7 @@ function Step({
 }) {
   return (
     <div className={`flex items-center gap-4 rounded-[20px] px-5 py-[18px] ${done ? "bg-raised" : "border-[1.5px] border-dashed border-line"}`}>
-      <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-[13px] font-bold ${done ? "bg-fg text-ink" : "bg-strong"}`}>{n}</span>
+      <span className={`grid h-8 w-8 shrink-0 place-items-center self-start rounded-full text-[13px] font-bold ${done ? "bg-fg text-ink" : "bg-strong"}`}>{n}</span>
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="text-[13px] font-medium text-dim">{title}</div>
         <div className={`truncate text-lg font-bold ${done ? "" : "text-dim"}`}>{value}</div>
@@ -75,9 +75,9 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
           <Step
             n={1}
             done={!!deck}
-            title="Колода — откуда брать"
+            title="Откуда брать видео"
             value={deck ?? "Папка не выбрана"}
-            note={deck ? `${count} ${plural(count, "видео", "видео", "видео")}${deckInfo ? ` · ${gb(deckInfo.bytes)}` : ""} · вложенные папки не трогаю` : "Папка с неразобранными видео."}
+            note={deck ? `Колода — ${count} ${plural(count, "видео", "видео", "видео")}${deckInfo ? ` · ${gb(deckInfo.bytes)}` : ""}. Берутся только видео в самой папке, вложенные не трогаю.` : "Колода — папка с неразобранными видео."}
             error={errors.deck}
             action={
               <Button variant={deck ? "secondary" : "primary"} onClick={() => pick("deck")}>
@@ -88,14 +88,14 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
           <Step
             n={2}
             done={!!table}
-            title="Стол — куда раскладывать"
+            title="Куда раскладывать"
             value={table ?? "Папка не выбрана"}
             note={
               table
                 ? piles
-                  ? `${piles} ${plural(piles, "стопка", "стопки", "стопок")} — по папкам внутри`
-                  : "Папок внутри пока нет — стопки создашь по ходу."
-                : "Папки внутри станут стопками. Пустая — не беда, стопки создашь по ходу."
+                  ? `Стол — ${piles} ${plural(piles, "стопка", "стопки", "стопок")} по папкам внутри`
+                  : "Стол — папок внутри пока нет, стопки создашь по ходу."
+                : "Стол — каждая папка внутри станет стопкой. Пустая — не беда, стопки создашь по ходу."
             }
             error={errors.table}
             action={
@@ -105,7 +105,7 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
             }
           />
           <div className="flex items-center gap-4 rounded-[20px] bg-raised px-5 py-[18px]">
-            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-strong text-[13px] font-bold">3</span>
+            <span className="grid h-8 w-8 shrink-0 place-items-center self-start rounded-full bg-strong text-[13px] font-bold">3</span>
             <div className="flex flex-1 flex-col gap-1">
               <div className="text-[13px] font-medium text-dim">Подсказки</div>
               <div className="text-lg font-bold">Угадывать стопку по кадрам</div>

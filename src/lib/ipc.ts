@@ -99,7 +99,7 @@ export type DupeView = {
   better: boolean;
 };
 
-export type Settings = Partial<Record<"deck_path" | "table_path" | "hints_enabled" | "theme" | "muted" | "mode" | "volume", string>>;
+export type Settings = Partial<Record<"deck_path" | "table_path" | "hints_enabled" | "theme" | "muted" | "mode" | "volume" | "updates", string>>;
 
 export type Developing = { done: number; total: number; paused: boolean; printed: number };
 
@@ -129,10 +129,29 @@ export const onDeckChanged = (fn: (d: { added: Card[]; gone: number[] }) => void
 export const onPilesChanged = (fn: (p: Pile[]) => void) => listen<Pile[]>("piles://changed", (e) => fn(e.payload));
 export const onHintsChanged = (fn: () => void) => listen("hints://changed", () => fn());
 export const onDupesChanged = (fn: () => void) => listen("dupes://changed", () => fn());
+export type UpdatePhase = "idle" | "checking" | "latest" | "downloading" | "ready" | "failed" | "off";
+
+export type UpdateState = {
+  phase: UpdatePhase;
+  version: string | null;
+  progress: number | null;
+  notes: string | null;
+  error: string | null;
+  checkedAt: number | null;
+  installed: boolean;
+  current: string;
+};
+
+export const onUpdateState = (fn: (s: UpdateState) => void) => listen<UpdateState>("update://state", (e) => fn(e.payload));
+export const onOpenFolder = (fn: (path: string) => void) => listen<string>("open://folder", (e) => fn(e.payload));
 export const onProgress = (fn: (p: Developing) => void) => listen<Developing>("develop://progress", (e) => fn(e.payload));
 
 export const ipc = {
   getState: () => invoke<AppState>("get_state"),
+  takeIncoming: () => invoke<string | null>("take_incoming"),
+  updateState: () => invoke<UpdateState>("update_state"),
+  updateCheck: () => invoke<UpdateState>("update_check"),
+  updateInstall: () => invoke<void>("update_install"),
   chooseDeck: (path: string) => invoke<{ count: number; bytes: number }>("choose_deck", { path }),
   chooseTable: (path: string) => invoke<Pile[]>("choose_table", { path }),
   setSetting: (key: string, value: string) => invoke<void>("set_setting_cmd", { key, value }),

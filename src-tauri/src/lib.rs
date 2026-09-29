@@ -10,20 +10,26 @@ mod moves;
 mod piles;
 mod playable;
 mod taskbar_icon;
+mod updates;
 mod watch;
 
 use commands::AppState;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _| {
             if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
                 let _ = window.set_focus();
             }
+            if let Some(path) = commands::folder_arg(args) {
+                let _ = app.emit("open://folder", path);
+            }
         }))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -43,14 +49,20 @@ pub fn run() {
             let wake = Arc::new(AtomicBool::new(true));
             develop::spawn(app.handle().clone(), data_dir.join("sorter.db"), data_dir.join("cache"), paused.clone(), wake.clone());
             watch::spawn(app.handle().clone(), data_dir.join("sorter.db"), wake.clone());
-            app.manage(AppState { db: Mutex::new(conn), data_dir, paused, wake });
+            let incoming = Mutex::new(commands::folder_arg(std::env::args()));
+            app.manage(AppState { db: Mutex::new(conn), data_dir, paused, wake, incoming });
+            app.manage(updates::Updates::default());
+            updates::init(app.handle());
             if let Some(window) = app.get_webview_window("main") {
                 taskbar_icon::apply(&window);
                 let target = window.clone();
-                window.on_window_event(move |event| {
-                    if matches!(event, tauri::WindowEvent::ScaleFactorChanged { .. }) {
-                        taskbar_icon::apply(&target);
+                let handle = app.handle().clone();
+                window.on_window_event(move |event| match event {
+                    tauri::WindowEvent::ScaleFactorChanged { .. } => taskbar_icon::apply(&target),
+                    tauri::WindowEvent::CloseRequested { .. } => {
+                        let _ = updates::install(&handle, false);
                     }
+                    _ => {}
                 });
                 let _ = window.show();
             }
@@ -83,6 +95,10 @@ pub fn run() {
             commands::playable,
             commands::trash_copies,
             commands::replace_copy,
+            commands::take_incoming,
+            updates::update_state,
+            updates::update_check,
+            updates::update_install,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

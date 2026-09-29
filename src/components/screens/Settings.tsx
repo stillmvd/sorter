@@ -7,6 +7,7 @@ import { Button } from "../ui/Button";
 import { BackButton, Heading } from "../ui/PageHeader";
 import { Segment } from "../ui/Segment";
 import { Toggle } from "../ui/Toggle";
+import { UpdatesTile } from "./UpdatesTile";
 
 type Theme = "system" | "dark" | "light";
 
@@ -173,8 +174,7 @@ export function SettingsScreen({ state, onChange, onBack }: { state: AppState; o
           </div>
         </Tile>
 
-        {/* TODO(003): половина ширины — рядом встанет «Версия и обновления» */}
-        <Tile wide title="Кэш проявки" note="Раскадровки и починенные копии видео. Очистка безопасна — всё проявится заново, когда карта понадобится.">
+        <Tile title="Кэш проявки" note="Раскадровки и починенные копии видео. Очистка безопасна — всё проявится заново, когда карта понадобится.">
           <div className="flex items-center gap-4">
             <div className="flex min-w-0 flex-1 items-baseline gap-2.5 whitespace-nowrap">
               <span className="text-[28px] leading-none font-bold tracking-[-0.02em]">{cache ? mb(cache.bytes) : "…"}</span>
@@ -187,6 +187,8 @@ export function SettingsScreen({ state, onChange, onBack }: { state: AppState; o
             </Button>
           </div>
         </Tile>
+
+        <UpdatesTile on={state.settings.updates !== "off"} onToggle={(v) => void set("updates", v ? "on" : "off")} />
       </div>
     </main>
   );

@@ -54,11 +54,13 @@ export function DeckScreen({
   onPiles,
   onJournal,
   onSettings,
+  banner,
 }: {
   initial: AppState;
   onPiles: () => void;
   onJournal: () => void;
   onSettings: () => void;
+  banner?: React.ReactNode;
 }) {
   const [cards, setCards] = useState<Card[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -648,7 +650,8 @@ export function DeckScreen({
 
   if (empty && mode !== "dupes")
     return (
-      <main className="mx-2 mb-2 flex min-h-0 flex-1 flex-col rounded-[28px] bg-cosmic px-10 py-7">
+      <main className="mx-2 mb-2 flex min-h-0 flex-1 flex-col gap-[18px] rounded-[28px] bg-cosmic px-10 py-7">
+        {banner}
         <Done
           placed={counts.placed}
           piles={piles}
@@ -707,6 +710,7 @@ export function DeckScreen({
           </>
         }
       />
+      {banner}
 
       {mode === "dupes" ? (
         <DupesScreen

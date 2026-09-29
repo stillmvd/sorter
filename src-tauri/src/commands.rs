@@ -18,9 +18,10 @@ pub struct AppState {
     pub data_dir: PathBuf,
     pub paused: Arc<AtomicBool>,
     pub wake: Arc<AtomicBool>,
+    pub incoming: Mutex<Option<String>>,
 }
 
-const SETTING_KEYS: [&str; 7] = ["deck_path", "table_path", "hints_enabled", "theme", "muted", "mode", "volume"];
+const SETTING_KEYS: [&str; 8] = ["deck_path", "table_path", "hints_enabled", "theme", "muted", "mode", "volume", "updates"];
 
 impl AppState {
     pub fn conn(&self) -> MutexGuard<'_, Connection> {
@@ -170,12 +171,27 @@ pub fn choose_table(state: State<AppState>, path: String) -> AppResult<Vec<PileV
 }
 
 #[tauri::command]
-pub fn set_setting_cmd(state: State<AppState>, key: String, value: String) -> AppResult<()> {
-    if !["hints_enabled", "theme", "muted", "mode", "volume"].contains(&key.as_str()) {
+pub fn set_setting_cmd(app: tauri::AppHandle, state: State<AppState>, key: String, value: String) -> AppResult<()> {
+    if !["hints_enabled", "theme", "muted", "mode", "volume", "updates"].contains(&key.as_str()) {
         return Err(AppError::new("BAD_SETTING", "Такой настройки нет."));
     }
     set_setting(&state.conn(), &key, &value)?;
+    if key == "updates" {
+        crate::updates::toggled(&app);
+    }
     Ok(())
+}
+
+#[tauri::command]
+pub fn take_incoming(state: State<AppState>) -> Option<String> {
+    state.incoming.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
+pub fn folder_arg<I: IntoIterator<Item = String>>(args: I) -> Option<String> {
+    let arg = args.into_iter().nth(1)?;
+    let path = arg.trim().trim_matches('"').trim_end_matches(['\\', '/']);
+    let path = if path.ends_with(':') { format!("{path}\\") } else { path.to_string() };
+    Path::new(&path).is_dir().then_some(path)
 }
 
 #[tauri::command]
@@ -398,4 +414,26 @@ pub fn playable(state: State<AppState>, card_id: i64) -> AppResult<String> {
         crate::playable::remux(Path::new(&path), &dst).map_err(|e| AppError::new("NOT_PLAYABLE", format!("Не получилось подготовить видео: {e}")))?;
     }
     Ok(dst.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn arg(a: &str) -> Option<String> {
+        folder_arg(["sorter.exe".to_string(), a.to_string()])
+    }
+
+    #[test]
+    fn folder_arg_takes_existing_folder_only() {
+        let dir = std::env::temp_dir().join("sorter тест папка");
+        std::fs::create_dir_all(&dir).unwrap();
+        let plain = dir.to_string_lossy().into_owned();
+        assert_eq!(arg(&plain).as_deref(), Some(plain.as_str()));
+        assert_eq!(arg(&format!("\"{plain}\\\"")).as_deref(), Some(plain.as_str()));
+        assert!(arg(&dir.join("нет такой").to_string_lossy()).is_none());
+        assert!(folder_arg(["sorter.exe".to_string()]).is_none());
+        let root = std::env::temp_dir().to_string_lossy()[..2].to_string();
+        assert_eq!(arg(&format!("{root}\\")), Some(format!("{root}\\")));
+    }
 }

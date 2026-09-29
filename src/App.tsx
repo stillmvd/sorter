@@ -1,12 +1,14 @@
+import { open } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useState } from "react";
 import { Titlebar } from "./components/Titlebar";
 import { DeckScreen } from "./components/deck/DeckScreen";
+import { ExplorerBar } from "./components/deck/ExplorerBar";
 import { Develop } from "./components/screens/Develop";
 import { JournalScreen } from "./components/screens/Journal";
 import { PilesScreen } from "./components/screens/Piles";
 import { SettingsScreen } from "./components/screens/Settings";
 import { Start } from "./components/screens/Start";
-import { errorText, ipc, type AppState } from "./lib/ipc";
+import { errorText, ipc, onOpenFolder, type AppState } from "./lib/ipc";
 
 export default function App() {
   const [state, setState] = useState<AppState | null>(null);
@@ -26,6 +28,45 @@ export default function App() {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  const [explorer, setExplorer] = useState<{ path: string; error?: string } | null>(null);
+
+  const openFolder = useCallback(
+    async (path: string) => {
+      try {
+        await ipc.chooseDeck(path);
+        setExplorer({ path });
+      } catch (e) {
+        setExplorer({ path, error: errorText(e) });
+      }
+      setDevelopView(false);
+      setScreen("deck");
+      await reload();
+    },
+    [reload],
+  );
+
+  useEffect(() => {
+    void ipc.takeIncoming().then((path) => {
+      if (path) void openFolder(path);
+    });
+    const off = onOpenFolder((path) => void openFolder(path));
+    return () => void off.then((f) => f());
+  }, [openFolder]);
+
+  const pickTable = useCallback(async () => {
+    if (!explorer) return;
+    const path = await open({ directory: true, title: "Куда раскладывать?" });
+    if (typeof path !== "string") return;
+    try {
+      await ipc.chooseTable(path);
+      if (explorer.error) await ipc.chooseDeck(explorer.path);
+      setExplorer({ path: explorer.path });
+    } catch (e) {
+      setExplorer({ ...explorer, error: errorText(e) });
+    }
+    await reload();
+  }, [explorer, reload]);
 
   useEffect(() => {
     const theme = state?.settings.theme;
@@ -66,7 +107,19 @@ export default function App() {
       )}
       {state && !showStart && ready && !developView && screen === "deck" && (
         <DeckScreen
+          key={state.settings.deck_path}
           initial={state}
+          banner={
+            explorer && (
+              <ExplorerBar
+                deck={explorer.path}
+                table={state.settings.table_path ?? ""}
+                error={explorer.error}
+                onPickTable={() => void pickTable()}
+                onClose={() => setExplorer(null)}
+              />
+            )
+          }
           onPiles={() => setScreen("piles")}
           onJournal={() => setScreen("journal")}
           onSettings={() => setScreen("settings")}
