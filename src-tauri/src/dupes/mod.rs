@@ -1,4 +1,5 @@
 pub mod matcher;
+pub mod near;
 pub mod print;
 
 use crate::db;
@@ -15,10 +16,10 @@ use std::time::UNIX_EPOCH;
 
 pub const BADGE_MIN: i64 = 80;
 
-struct FileInfo {
-    path: String,
-    size: i64,
-    mtime: i64,
+pub struct FileInfo {
+    pub path: String,
+    pub size: i64,
+    pub mtime: i64,
 }
 
 fn info(path: &Path) -> Option<FileInfo> {
@@ -27,12 +28,12 @@ fn info(path: &Path) -> Option<FileInfo> {
     Some(FileInfo { path: path.to_string_lossy().into_owned(), size: meta.len() as i64, mtime })
 }
 
-fn files(conn: &Connection) -> rusqlite::Result<Vec<FileInfo>> {
+pub fn files(conn: &Connection) -> rusqlite::Result<Vec<FileInfo>> {
     let deck = db::get_setting(conn, "deck_path")?.unwrap_or_default();
     let table = db::get_setting(conn, "table_path")?.unwrap_or_default();
     let mut out = Vec::new();
     let names: Vec<String> = conn
-        .prepare("SELECT file_name FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred')")?
+        .prepare("SELECT file_name FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred') ORDER BY status = 'deferred', position")?
         .query_map(params![deck], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
     out.extend(names.iter().filter_map(|n| info(&Path::new(&deck).join(n))));
@@ -75,8 +76,13 @@ fn cached_sha(conn: &Connection, f: &FileInfo) -> rusqlite::Result<Option<Vec<u8
     let Some(sha) = sha256(Path::new(&f.path)) else { return Ok(None) };
     conn.execute(
         "INSERT INTO fingerprint(path, size, mtime, sha256) VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT(path) DO UPDATE SET size = excluded.size, mtime = excluded.mtime, sha256 = excluded.sha256,
-           frames = NULL, audio = NULL, semantic = NULL, mean = NULL, state = 'new'",
+         ON CONFLICT(path) DO UPDATE SET sha256 = excluded.sha256,
+           state = CASE WHEN size = excluded.size AND mtime = excluded.mtime THEN state ELSE 'new' END,
+           frames = CASE WHEN size = excluded.size AND mtime = excluded.mtime THEN frames END,
+           audio = CASE WHEN size = excluded.size AND mtime = excluded.mtime THEN audio END,
+           semantic = CASE WHEN size = excluded.size AND mtime = excluded.mtime THEN semantic END,
+           mean = CASE WHEN size = excluded.size AND mtime = excluded.mtime THEN mean END,
+           size = excluded.size, mtime = excluded.mtime",
         params![f.path, f.size, f.mtime, sha],
     )?;
     Ok(Some(sha))

@@ -231,10 +231,10 @@ pub mod mf {
     const EOS: u32 = MF_SOURCE_READERF_ENDOFSTREAM.0 as u32;
 
     thread_local! {
-        static GPU: Option<IMFDXGIDeviceManager> = gpu().ok();
+        static DEVICE: Option<ID3D11Device> = device().ok();
     }
 
-    fn gpu() -> windows::core::Result<IMFDXGIDeviceManager> {
+    fn device() -> windows::core::Result<ID3D11Device> {
         unsafe {
             let mut device = None;
             D3D11CreateDevice(
@@ -250,10 +250,16 @@ pub mod mf {
             )?;
             let device = device.unwrap();
             let _ = device.cast::<ID3D11Multithread>()?.SetMultithreadProtected(true);
+            Ok(device)
+        }
+    }
+
+    fn manager(device: &ID3D11Device) -> windows::core::Result<IMFDXGIDeviceManager> {
+        unsafe {
             let (mut token, mut manager) = (0u32, None);
             MFCreateDXGIDeviceManager(&mut token, &mut manager)?;
             let manager = manager.unwrap();
-            manager.ResetDevice(&device, token)?;
+            manager.ResetDevice(device, token)?;
             Ok(manager)
         }
     }
@@ -310,7 +316,7 @@ pub mod mf {
             MFCreateAttributes(&mut attrs, 3)?;
             let attrs = attrs.unwrap();
             attrs.SetUINT32(&MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, 1)?;
-            if let Some(manager) = GPU.with(|g| g.clone()) {
+            if let Some(manager) = DEVICE.with(|d| d.as_ref().and_then(|d| manager(d).ok())) {
                 attrs.SetUnknown(&MF_SOURCE_READER_D3D_MANAGER, &manager)?;
                 attrs.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)?;
             }
