@@ -1,5 +1,5 @@
 import { memo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
-import { frameSrc, media, type Card } from "../../lib/ipc";
+import { frameSrc, ipc, media, type Card } from "../../lib/ipc";
 import { FRAMES } from "../deck/FilmStrip";
 
 const tc = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, "0")}`;
@@ -27,6 +27,8 @@ export const Tile = memo(function Tile({
 }) {
   const [pct, setPct] = useState<number | null>(null);
   const [live, setLive] = useState(false);
+  const [src, setSrc] = useState(() => media(card.path));
+  const fixed = useRef(false);
   const video = useRef<HTMLVideoElement>(null);
   const want = useRef(0);
 
@@ -79,9 +81,14 @@ export const Tile = memo(function Tile({
       {scrubbing && (
         <video
           ref={video}
-          src={media(card.path)}
+          src={src}
           muted
           preload="auto"
+          onError={() => {
+            if (fixed.current) return;
+            fixed.current = true;
+            void ipc.playable(card.id).then((p) => setSrc(media(p)), () => undefined);
+          }}
           onLoadedMetadata={seek}
           onSeeked={() => {
             setLive(true);

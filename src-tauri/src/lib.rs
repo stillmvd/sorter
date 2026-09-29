@@ -8,6 +8,7 @@ mod hints;
 mod media;
 mod moves;
 mod piles;
+mod playable;
 mod watch;
 
 use commands::AppState;
@@ -68,6 +69,7 @@ pub fn run() {
             commands::dupes_for,
             commands::dismiss_dupe,
             commands::dupe_groups,
+            commands::playable,
             commands::trash_copies,
             commands::replace_copy,
         ])

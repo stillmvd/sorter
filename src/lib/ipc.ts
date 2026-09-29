@@ -152,6 +152,7 @@ export const ipc = {
   dupesFor: (cardId: number) => invoke<DupeView[]>("dupes_for", { cardId }),
   dismissDupe: (a: string, b: string) => invoke<void>("dismiss_dupe", { a, b }),
   dupeGroups: () => invoke<DupeGroups>("dupe_groups"),
+  playable: (cardId: number) => invoke<string>("playable", { cardId }),
   trashCopies: (paths: string[]) => invoke<{ move: Move; piles: Pile[] }>("trash_copies", { paths }),
   replaceCopy: (cardId: number, worsePath: string) =>
     invoke<{ move: Move; piles: Pile[] }>("replace_copy", { cardId, worsePath }),

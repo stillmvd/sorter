@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { media, type Card as CardData } from "../../lib/ipc";
+import { ipc, media, type Card as CardData } from "../../lib/ipc";
 
 const tc = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
@@ -40,13 +40,15 @@ function Face({
 }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [time, setTime] = useState({ t: 0, d: 0 });
+  const [src, setSrc] = useState(() => media(card.path));
+  const fixing = useRef<"no" | "busy" | "done">("no");
 
   useEffect(() => {
     const v = ref.current;
     if (!v) return;
     if (active && !paused) void v.play().catch(() => undefined);
     else v.pause();
-  }, [active, paused]);
+  }, [active, paused, src]);
 
   useEffect(() => {
     if (ref.current) ref.current.volume = volume;
@@ -55,14 +57,29 @@ function Face({
   const brokenRef = useRef(onBroken);
   brokenRef.current = onBroken;
 
+  const fail = () => {
+    if (fixing.current !== "no") {
+      if (fixing.current === "done") brokenRef.current();
+      return;
+    }
+    fixing.current = "busy";
+    ipc
+      .playable(card.id)
+      .then((path) => {
+        fixing.current = "done";
+        setSrc(media(path));
+      })
+      .catch(() => brokenRef.current());
+  };
+
   useEffect(() => {
     if (!active) return;
     const v = ref.current;
     const timer = window.setTimeout(() => {
-      if (v && v.readyState < 2) brokenRef.current();
+      if (v && v.readyState < 2 && fixing.current !== "busy") brokenRef.current();
     }, 1500);
     return () => window.clearTimeout(timer);
-  }, [active]);
+  }, [active, src]);
 
   return (
     <div className="flex h-full flex-col gap-2.5 p-3">
@@ -77,7 +94,7 @@ function Face({
         {!broken && (
           <video
             ref={ref}
-            src={media(card.path)}
+            src={src}
             crossOrigin="anonymous"
             muted={muted}
             loop
@@ -91,7 +108,7 @@ function Face({
               setTime({ t: 0, d: v.duration || 0 });
             }}
             onTimeUpdate={(e) => setTime({ t: e.currentTarget.currentTime, d: e.currentTarget.duration || 0 })}
-            onError={onBroken}
+            onError={fail}
           />
         )}
         {paused && active && !broken && (

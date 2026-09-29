@@ -340,3 +340,19 @@ pub fn replace_copy(state: State<AppState>, card_id: i64, worse_path: String) ->
 pub fn dupe_groups(state: State<AppState>) -> AppResult<dupes::Groups> {
     dupes::groups(&state.conn())
 }
+
+#[tauri::command]
+pub fn playable(state: State<AppState>, card_id: i64) -> AppResult<String> {
+    let path = {
+        let conn = state.conn();
+        deck::cards(&conn, &[card_id])?.into_iter().next().map(|c| c.path)
+    }
+    .ok_or_else(|| AppError::new("NO_CARD", "Карта не найдена."))?;
+    let dir = state.data_dir.join("cache").join(card_id.to_string());
+    let dst = dir.join("play.mp4");
+    if !dst.exists() {
+        std::fs::create_dir_all(&dir).map_err(|e| AppError::new("CACHE", e.to_string()))?;
+        crate::playable::remux(Path::new(&path), &dst).map_err(|e| AppError::new("NOT_PLAYABLE", format!("Не получилось подготовить видео: {e}")))?;
+    }
+    Ok(dst.to_string_lossy().into_owned())
+}
