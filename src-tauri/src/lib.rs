@@ -48,7 +48,7 @@ pub fn run() {
                 taskbar_icon::apply(&window);
                 let target = window.clone();
                 window.on_window_event(move |event| {
-                    if matches!(event, tauri::WindowEvent::ThemeChanged(_) | tauri::WindowEvent::Focused(true)) {
+                    if matches!(event, tauri::WindowEvent::ScaleFactorChanged { .. }) {
                         taskbar_icon::apply(&target);
                     }
                 });

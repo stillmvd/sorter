@@ -23,6 +23,8 @@ DARK = "#141416"
 W, H, R, D, GAP = 24, 30, 3.5, 5.5, 2.2
 HOLES, PLAY = 3, 9
 SMALL_MAX = 48
+SMALL_PLAY = 9.5
+TASKBAR_SIZES = [24, 30, 36, 48]
 FRACTION = .66
 ICO_SIZES = [24, 30, 32, 36, 40, 48, 60, 64, 72, 96, 128, 256]
 
@@ -74,12 +76,23 @@ def svg(inner, view="0 0 64 64", size=None):
     return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{view}"{dims}>{inner}</svg>\n'
 
 
-def small(bar):
-    geom = fit(glyph(), 58)
-    silhouette = unary_union([Polygon(p.exterior) for p in getattr(geom, "geoms", [geom])])
+def round_play(cx, cy, h, r):
+    return play(cx, cy, h).buffer(-r, join_style="mitre").buffer(r, quad_segs=16)
+
+
+def pixel_mark(circle, bar, play_h=None):
+    front_box = rrect(2, 6, 15, 17, 3)
+    if play_h:
+        cut = [round_play(9.6, 14.5, play_h, .9)]
+    else:
+        cut = [rrect(x, y, 2, 2, .4) for x in (4, 13) for y in (8, 13, 18)] + [play(9.6, 14.5, 6)]
+    front = front_box.difference(unary_union(cut))
+    back = rrect(8, 1, 14, 17, 3).difference(front_box.buffer(2, quad_segs=16))
+    geom = unary_union([front, back])
+    silhouette = unary_union([rrect(2, 6, 15, 17, 3), rrect(8, 1, 14, 17, 3)]).buffer(1, quad_segs=16)
     plate = PAPER if bar == "dark" else INK
-    return (f'<circle cx="32" cy="32" r="29" fill="{plate}"/>'
-            f'<path d="{path_d(silhouette)}" fill="{INK}" stroke="{INK}" stroke-width="3.5" stroke-linejoin="round"/>'
+    disc = f'<circle cx="12" cy="12" r="12" fill="{plate}"/>' if circle else ""
+    return (f'{disc}<path d="{path_d(silhouette)}" fill="{INK}"/>'
             f'<path d="{path_d(geom)}" fill="{PAPER}" fill-rule="evenodd"/>')
 
 
@@ -120,14 +133,13 @@ def main():
         (ROOT / name).write_text(svg(inner, view=f"0 0 {total:.1f} 64"), encoding="utf-8")
     (PROJECT / "src/components/ui/markPath.ts").write_text(f'export const MARK_PATH = "{mono}";\n', encoding="utf-8")
 
-    for bar in ("dark", "light"):
-        (ROOT / f"mark-small-{bar}.svg").write_text(svg(small(bar)), encoding="utf-8")
+    (ROOT / "mark-small.svg").write_text(svg(pixel_mark(False, "dark", SMALL_PLAY), view="0 0 24 24"), encoding="utf-8")
     tmp = ROOT / "png"
     tmp.mkdir(exist_ok=True)
     for px in sorted(set(ICO_SIZES + [32, 128, 256])):
-        export(ROOT / ("mark-small-dark.svg" if px <= SMALL_MAX else "mark.svg"), tmp / f"{px}.png", px)
-    for bar in ("dark", "light"):
-        export(ROOT / f"mark-small-{bar}.svg", ICONS / f"taskbar-{bar}.png", 48)
+        export(ROOT / ("mark-small.svg" if px <= SMALL_MAX else "mark.svg"), tmp / f"{px}.png", px)
+    for px in TASKBAR_SIZES:
+        (ICONS / f"taskbar-{px}.png").write_bytes((tmp / f"{px}.png").read_bytes())
     for name, px in (("32x32.png", 32), ("128x128.png", 128), ("128x128@2x.png", 256)):
         (ICONS / name).write_bytes((tmp / f"{px}.png").read_bytes())
     images = [Image.open(tmp / f"{px}.png").convert("RGBA") for px in ICO_SIZES]

@@ -8,7 +8,7 @@ ROOT = pathlib.Path(__file__).resolve().parent
 PROJECT = ROOT.parent.parent
 FONTS = PROJECT / "src/fonts"
 OUT = ROOT / "logo-page.html"
-WAVES = ["wave1", "wave2", "wave3", "wave4", "wave5"]
+WAVES = ["wave1", "wave2", "wave3", "wave4", "wave5", "wave6", "wave7"]
 INKSCAPE = "C:/Program Files/Inkscape/bin/inkscape.com"
 
 sys.path.insert(0, str(ROOT))
@@ -228,7 +228,7 @@ def final_section():
         return ""
     symbols = "".join(f'<symbol id="final-{key}" viewBox="{logo_inner(name)[0]}">{logo_inner(name)[1]}</symbol>'
                       for key, name in (("mark", "mark.svg"), ("mono", "mark-mono.svg"),
-                                        ("sdark", "mark-small-dark.svg"), ("slight", "mark-small-light.svg")))
+                                        ("small", "mark-small.svg")))
 
     def use(key, size=None, cls=""):
         attrs = (f' width="{size}" height="{size}"' if size else "") + (f' class="{cls}"' if cls else "")
@@ -240,7 +240,7 @@ def final_section():
     marks = "".join(f'<div class="build-tile {theme}">{use(key, cls="big")}<span class="sizes">{sizes(key)}</span></div>'
                     for theme, key in (("light", "mark"), ("dark", "mark"), ("light", "mono"), ("dark", "mono")))
     bars = "".join(f'<div class="tile bar-{bar}">{use(key, cls="big")}<span class="sizes">{sizes(key)}</span></div>'
-                   for bar, key in (("dark", "sdark"), ("light", "slight")))
+                   for bar, key in (("dark", "small"), ("light", "small")))
     lockups = "".join(
         f'<div class="build-tile {theme}"><svg viewBox="{view}" class="lockup" role="img" aria-label="Sorter">{body}</svg></div>'
         for theme, (view, body) in (("light", logo_inner("lockup.svg")), ("dark", logo_inner("lockup-on-dark.svg"))))
@@ -251,15 +251,15 @@ def final_section():
         f'<div class="s-scene {theme}"><div class="s-title">{use("mono", 16)}<span>Sorter — G:&#92;vk videos</span>'
         f'<span class="s-dots">— ▢ ✕</span></div><div class="s-empty">{use("mono", 72)}'
         f'<b>Колода пуста</b><span>Все видео лежат по стопкам</span></div>'
-        f'<div class="s-taskbar"><i></i><i></i><span class="s-on">{use("sdark", 24)}</span><i></i></div></div>'
+        f'<div class="s-taskbar"><i></i><i></i><span class="s-on">{use("small", 24)}</span><i></i></div></div>'
         for theme in ("light", "dark"))
     return (f'<section class="wave final"><div class="wave-head"><h2>Готовый знак</h2>'
             f'<p class="prompt">B2c — колода из трёх карт, передняя с перфорацией по три дырочки и «play». В круге — иконка '
-            f'приложения, доля 66 %, от 64 px; до 48 px — колода шире круга, круг по теме панели; без подложки — шапка окна и пустые экраны, на всё поле. Геометрия — '
+            f'приложения, доля 66 %, от 64 px; до 48 px — две карты с крупным «play», нарисованные по сетке 24 px; без подложки — шапка окна и пустые экраны, на всё поле. Геометрия — '
             f'brand/logo/generate.py, он же пишет иконки, .ico и путь для компонента Mark.</p></div>'
             f'<svg width="0" height="0" style="position:absolute" aria-hidden="true">{symbols}</svg>'
             f'<div class="build"><h3>Знак</h3><div class="build-row">{marks}</div></div>'
-            f'<div class="build"><h3>Панель задач, 48 px и меньше — круг по теме</h3><div class="build-row">{bars}</div></div>'
+            f'<div class="build"><h3>Панель задач и мелкие размеры, до 48 px — две карты по сетке 24 px</h3><div class="build-row">{bars}</div></div>'
             f'<div class="build"><h3>Локап</h3><div class="build-row">{lockups}</div></div>'
             f'<div class="build"><h3>Иконки приложения</h3><div class="build-row">{icon_row}</div></div>'
             f'<div class="build"><h3>В Windows</h3><div class="s-scenes">{scenes}</div></div></section>')
