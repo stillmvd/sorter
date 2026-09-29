@@ -33,6 +33,7 @@ export function DupeBadge({
   hint,
   canDefer,
   onTrash,
+  onCompare,
   onDismiss,
   onDefer,
 }: {
@@ -43,6 +44,7 @@ export function DupeBadge({
   hint: { pile: Pile; score: number } | null;
   canDefer: boolean;
   onTrash: () => void;
+  onCompare: () => void;
   onDismiss: () => void;
   onDefer: () => void;
 }) {
@@ -58,22 +60,31 @@ export function DupeBadge({
     .join(" · ");
   return (
     <div className="flex flex-col gap-2.5">
-      <div className="flex items-center gap-3.5 rounded-[20px] bg-raised px-4 py-3.5 outline-[1.5px] outline-offset-[-1.5px] outline-fg outline-dashed">
-        <div className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-fg text-ink">
-          <Copy className="h-[22px] w-[22px]" strokeWidth={1.5} />
-        </div>
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <div className="text-xs font-medium text-dim">
-            Дубль · {kindText(dupe, durationMs)} · {dupe.confidence}%
+      <div className="flex flex-wrap items-center gap-x-3.5 gap-y-3 rounded-[20px] bg-raised px-4 py-3.5 outline-[1.5px] outline-offset-[-1.5px] outline-fg outline-dashed">
+        <div className="flex min-w-0 flex-[1_1_300px] items-center gap-3.5">
+          <div className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-fg text-ink">
+            <Copy className="h-[22px] w-[22px]" strokeWidth={1.5} />
           </div>
-          <div className="truncate text-[22px] font-bold tracking-[-0.02em]">{where}</div>
-          <div className="truncate text-[13px] text-dim" title={dupe.path}>
-            {meta}
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <div className="text-xs font-medium text-dim">
+              Дубль · {kindText(dupe, durationMs)} · {dupe.confidence}%
+            </div>
+            <div className="flex min-w-0 items-baseline gap-2.5">
+              <span className="min-w-0 truncate text-[22px] font-bold tracking-[-0.02em]">{where}</span>
+              <span className="min-w-0 flex-1 truncate text-[13px] text-dim" title={dupe.path}>
+                {meta}
+              </span>
+            </div>
           </div>
         </div>
-        <Button variant="primary" size={44} hotkey="D" onClick={onTrash}>
-          {dupe.better ? "Убрать в Корзину" : replace ? "Заменить" : "Убрать копию"}
-        </Button>
+        <div className="ml-auto flex gap-2">
+          <Button size={44} hotkey="C" onClick={onCompare} className="bg-strong! hover:bg-line!">
+            Сравнить
+          </Button>
+          <Button variant="primary" size={44} hotkey="D" onClick={onTrash}>
+            {dupe.better ? "Убрать в Корзину" : replace ? "Заменить" : "Убрать копию"}
+          </Button>
+        </div>
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <div className="flex min-w-0 flex-[1_1_260px] items-center gap-2.5 rounded-[20px] bg-raised px-4 py-2.5 opacity-55">

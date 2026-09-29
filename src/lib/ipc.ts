@@ -69,6 +69,10 @@ export type DupeView = {
   height: number | null;
   bitrate: number | null;
   size: number;
+  takenAt: number | null;
+  visual: number | null;
+  audio: number | null;
+  semantic: number | null;
   better: boolean;
 };
 

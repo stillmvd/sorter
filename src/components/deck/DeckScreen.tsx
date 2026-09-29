@@ -23,6 +23,7 @@ import { LastMove, LastMoveLine } from "./LastMove";
 import { ContactSheet } from "../table/ContactSheet";
 import { Segment } from "../ui/Segment";
 import { PilesRow } from "./PilesRow";
+import { Compare } from "../dupes/Compare";
 
 const mb = (b: number) => `${(b / 1024 ** 2).toFixed(1).replace(".", ",")} МБ`;
 const date = (ms: number) => new Date(ms).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
@@ -51,6 +52,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
   const [query, setQuery] = useState("");
   const [toast, setToast] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
+  const [comparing, setComparing] = useState(false);
   const [muted, setMuted] = useState(initial.settings.muted !== "0");
   const [volume, setVolume] = useState(() => Number(initial.settings.volume ?? "0.7"));
   const [menu, setMenu] = useState<{ pile: Pile; x: number; y: number } | null>(null);
@@ -258,6 +260,31 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
       void refill();
     },
     [refill],
+  );
+
+  useEffect(() => setComparing(false), [current?.id]);
+
+  const openCompare = useCallback(() => {
+    setPaused(true);
+    setComparing(true);
+  }, []);
+
+  const closeCompare = useCallback(() => {
+    setComparing(false);
+    setPaused(false);
+  }, []);
+
+  const keepFromCompare = useCallback(
+    (mine: boolean) => {
+      const trash = pilesRef.current.find((p) => p.isTrash);
+      closeCompare();
+      if (!dupe || !trash) return;
+      if (!mine) return place(trash, "key");
+      const target = dupe.where === "pile" ? pilesRef.current.find((p) => !p.isTrash && p.name === dupe.pileName) : undefined;
+      if (target) return place(target, "key", (card) => ipc.replaceCopy(card.id, dupe.path));
+      return trashCopies([dupe]);
+    },
+    [dupe, place, trashCopies, closeCompare],
   );
 
   const resolveDupe = useCallback(() => {
@@ -499,9 +526,10 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
       return;
     }
     const k = keyOf(e);
-    if (mode === "deck" && dupe && (k === "D" || k === "N")) {
+    if (mode === "deck" && dupe && (k === "D" || k === "N" || k === "C")) {
       e.preventDefault();
-      void (k === "D" ? resolveDupe() : dismissDupe());
+      if (k === "C") openCompare();
+      else void (k === "D" ? resolveDupe() : dismissDupe());
       return;
     }
     const pile = k ? piles.find((p) => p.key === k) : undefined;
@@ -590,7 +618,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
             />
           )}
           {current && (
-            <div className="flex min-w-0 flex-1 flex-col justify-center gap-3">
+            <div className="flex min-w-0 flex-1 flex-col justify-center-safe gap-3 overflow-y-auto">
               <div className="flex flex-col gap-1">
                 <div className="flex min-w-0 items-center gap-2">
                   <div className="truncate text-lg font-bold">{current.fileName}</div>
@@ -624,6 +652,7 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
                   hint={hintPile ? { pile: hintPile, score: hints.hints[0].score } : null}
                   canDefer={cards.length > 1}
                   onTrash={() => void resolveDupe()}
+                  onCompare={openCompare}
                   onDismiss={() => void dismissDupe()}
                   onDefer={() => void defer()}
                 />
@@ -718,6 +747,19 @@ export function DeckScreen({ initial, onReload }: { initial: AppState; onReload:
         >
           {toast}
         </div>
+      )}
+      {comparing && mode === "deck" && current && dupe && (
+        <Compare
+          card={current}
+          dupe={dupe}
+          volume={muted ? 0 : volume}
+          onKeep={(mine) => void keepFromCompare(mine)}
+          onDismiss={() => {
+            closeCompare();
+            void dismissDupe();
+          }}
+          onClose={closeCompare}
+        />
       )}
     </main>
   );

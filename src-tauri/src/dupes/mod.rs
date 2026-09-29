@@ -179,6 +179,10 @@ pub struct DupeView {
     height: Option<i64>,
     bitrate: Option<i64>,
     size: i64,
+    taken_at: Option<i64>,
+    visual: Option<f64>,
+    audio: Option<f64>,
+    semantic: Option<f64>,
     better: bool,
 }
 
@@ -248,16 +252,19 @@ pub fn dupes_for(conn: &Connection, card_id: i64) -> AppResult<Vec<DupeView>> {
     let deck = db::get_setting(conn, "deck_path")?.unwrap_or_default();
     let table = db::get_setting(conn, "table_path")?.unwrap_or_default();
     let Some(card) = deck::cards(conn, &[card_id])?.into_iter().next() else { return Ok(Vec::new()) };
-    let rows: Vec<(String, String, String, i64, Option<i64>)> = conn
+    type Row = (String, String, String, i64, Option<i64>, [Option<f64>; 3]);
+    let rows: Vec<Row> = conn
         .prepare(
-            "SELECT a, b, kind, confidence, offset_ms FROM dupe WHERE (a = ?1 OR b = ?1) AND confidence >= ?2
+            "SELECT a, b, kind, confidence, offset_ms, visual, audio, semantic FROM dupe WHERE (a = ?1 OR b = ?1) AND confidence >= ?2
              ORDER BY confidence DESC",
         )?
-        .query_map(params![card.path, BADGE_MIN], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+        .query_map(params![card.path, BADGE_MIN], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, [r.get(5)?, r.get(6)?, r.get(7)?]))
+        })?
         .collect::<Result<_, _>>()?;
     let (me, _, _, _) = copy_of(conn, &card.path, &deck)?;
     let mut out = Vec::new();
-    for (a, b, kind, confidence, offset) in rows {
+    for (a, b, kind, confidence, offset, [visual, audio, semantic]) in rows {
         let mine = a == card.path;
         let offset = offset.map(|o| if mine { o } else { -o });
         let other = if mine { b } else { a };
@@ -287,6 +294,10 @@ pub fn dupes_for(conn: &Connection, card_id: i64) -> AppResult<Vec<DupeView>> {
             height,
             bitrate: Some(copy.bitrate).filter(|b| *b > 0),
             size: fs::metadata(&p).map(|m| m.len() as i64).unwrap_or(0),
+            taken_at: (copy.taken_at != i64::MAX).then_some(copy.taken_at),
+            visual,
+            audio,
+            semantic,
             better: better(&copy, &me),
         });
     }
