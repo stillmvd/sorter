@@ -75,11 +75,51 @@ pub fn init(conn: &Connection) -> rusqlite::Result<()> {
            vector BLOB NOT NULL
          );
          CREATE INDEX IF NOT EXISTS example_pile ON example(pile_id);
+         CREATE TABLE IF NOT EXISTS fingerprint (
+           path TEXT PRIMARY KEY,
+           size INTEGER NOT NULL,
+           mtime INTEGER NOT NULL,
+           sha256 BLOB,
+           duration_ms INTEGER,
+           width INTEGER,
+           height INTEGER,
+           bitrate INTEGER,
+           box TEXT,
+           frames BLOB,
+           audio BLOB,
+           semantic BLOB,
+           mean BLOB,
+           state TEXT NOT NULL DEFAULT 'new' CHECK (state IN ('new','ok','failed'))
+         );
+         CREATE INDEX IF NOT EXISTS fingerprint_sha ON fingerprint(sha256);
+         CREATE TABLE IF NOT EXISTS dupe (
+           a TEXT NOT NULL,
+           b TEXT NOT NULL,
+           kind TEXT NOT NULL CHECK (kind IN ('exact','same','trim','crop')),
+           confidence INTEGER NOT NULL,
+           offset_ms INTEGER,
+           visual REAL,
+           audio REAL,
+           semantic REAL,
+           PRIMARY KEY (a, b)
+         );
+         CREATE INDEX IF NOT EXISTS dupe_b ON dupe(b);
+         CREATE TABLE IF NOT EXISTS dupe_dismissed (
+           a TEXT NOT NULL,
+           b TEXT NOT NULL,
+           PRIMARY KEY (a, b)
+         );
          CREATE TABLE IF NOT EXISTS embedding (
            card_id INTEGER PRIMARY KEY REFERENCES card(id),
            vector BLOB NOT NULL
          );",
     )?;
+    let has_group: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('move') WHERE name = 'group_id'")?
+        .exists([])?;
+    if !has_group {
+        conn.execute("ALTER TABLE move ADD COLUMN group_id INTEGER", [])?;
+    }
     conn.execute(
         "INSERT OR IGNORE INTO settings(key, value) VALUES ('schema_version', ?1)",
         params![SCHEMA_VERSION.to_string()],

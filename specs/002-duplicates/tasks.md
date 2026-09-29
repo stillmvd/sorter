@@ -14,7 +14,7 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 `src-tauri/Cargo.toml`: `sha2` (хеш файла); `windows` — фичи для D3D11 device manager, если понадобятся для аппаратного декодирования (`Win32_Graphics_Direct3D11`, `Win32_Graphics_Dxgi`)
+- [ ] T001 `src-tauri/Cargo.toml`: `sha2` (хеш файла — уже добавлен); `windows` — фичи для D3D11 device manager, если понадобятся для аппаратного декодирования (`Win32_Graphics_Direct3D11`, `Win32_Graphics_Dxgi`)
 - [ ] T002 [P] Тестовый набор: скрипт `scripts/make-variants.ps1` (ffmpeg из `%TEMP%\ffmpeg`) — `G:\sorter-test\variants\`: `orig.mp4` (копия потока `20181222_143020.mp4`), `v_compressed` (CRF 34), `v_360p`, `v_trim_12_19` (7 с с 12-й), `v_trim_3s` (3 с с 30-й), `v_crop80`, `v_pad` (чёрные поля), `v_combo_mute` (5–25 с, 480p, без звука)
 
 ---
@@ -23,7 +23,7 @@
 
 **⚠️ CRITICAL**: отпечаток и сравнение — до любой истории.
 
-- [ ] T003 `src-tauri/src/db.rs`: таблицы `fingerprint` (path PK, size, mtime, sha256 blob(32), duration_ms, width, height, bitrate, rotation, box text «`t,b,l,r` в долях», frames blob «u64 LE, 4 в секунду», audio blob «u32 LE, шаг 256/5512 с; пусто — нет звука», semantic blob «f32 × 768, 1 в секунду», mean blob, state ∈ `ok|failed`), `dupe` (a, b «пути, `a < b`», kind ∈ `exact|same|trim|crop`, confidence 0–100, offset_ms, visual, audio, semantic real), `dupe_dismissed` (a, b PK); колонка `move.group_id integer?`
+- [X] T003 `src-tauri/src/db.rs`: таблицы `fingerprint` (path PK, size, mtime, sha256 blob(32), duration_ms, width, height, bitrate, rotation, box text «`t,b,l,r` в долях», frames blob «u64 LE, 4 в секунду», audio blob «u32 LE, шаг 256/5512 с; пусто — нет звука», semantic blob «f32 × 768, 1 в секунду», mean blob, state ∈ `ok|failed`), `dupe` (a, b «пути, `a < b`», kind ∈ `exact|same|trim|crop`, confidence 0–100, offset_ms, visual, audio, semantic real), `dupe_dismissed` (a, b PK); колонка `move.group_id integer?`
 - [ ] T004 [P] `src-tauri/src/dupes/matcher.rs`: `align(a: &[u64|u32], b, max_ham) -> (score, offset)` — голосование за сдвиг по парам с расстоянием Хэмминга ≤ порога, счёт = доля кадров короткого, совпавших (±1 шаг) при лучшем сдвиге (research R2); `semantic_score(a, b)` — скользящее среднее косинусов на перекрытии ≥ 80 % короткого; `decide(exact, visual, audio, semantic, durations) -> Option<(kind, confidence, offset)>` по правилу research R3 (точная — sha; `same`/`trim` — кадры ≥ 0,6, `trim` если длины отличаются > 1 с; `crop` — кадры < 0,6, звук ≥ 0,9 и смысл ≥ 0,85; уверенность по формулам R3)
 - [ ] T005 [P] Тесты `matcher.rs` на синтетике: сдвинутая подпоследовательность находит сдвиг; шум в 5 бит проходит, случайные последовательности — нет; «один звук 0,76 + смысл 0,55» — не дубль; «серия: смысл 0,83, звук 0,1» — не дубль; «кроп: звук 1,0, смысл 0,91» — `crop` ≥ 80
 - [ ] T006 `src-tauri/src/dupes/print.rs`: отпечаток файла — SHA-256 потоково; Media Foundation: ридер с `MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING` (+ аппаратные преобразования, если доступны), видео 128×128 RGB32 последовательно, кадр при пересечении каждой 1/4 с; чёрные поля — по максимуму яркости за всё видео (порог 24), срез до хеширования; pHash (32×32 серый, DCT, 8×8 без DC, медиана) → u64; каждый 4-й кадр (1/с) в 256 px с тем же срезом → DINOv2 (`hints::Engine::embed`, батчами); звук — PCM float, моно, ресэмплинг до 5 512 Гц, окно 2 048 Ханна, шаг 256, 33 полосы 300–2 000 Гц, 32 бита знаков разностей (research R1); сведения — длительность, размер кадра с поворотом, битрейт
