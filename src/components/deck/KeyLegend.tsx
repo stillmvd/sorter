@@ -10,7 +10,17 @@ function Cap({ children }: { children: string }) {
 
 const DUPE_ROWS: { keys: string[]; label: string }[] = [
   { keys: ["D"], label: "убрать лишнюю копию в Корзину" },
-  { keys: ["N"], label: "это разные видео — не дубль" },
+  { keys: ["N"], label: "это разные файлы — не дубль" },
+];
+
+export type Face = "video" | "photo" | "series";
+
+const VIDEO_ONLY = new Set(["пауза — или клик по видео", "кадр плёнки назад / вперёд", "звук", "громкость видео"]);
+
+const SERIES_ROWS: { keys: string[]; label: string }[] = [
+  { keys: ["←", "→"], label: "снимок серии назад / вперёд" },
+  { keys: ["Space"], label: "отметить снимок — отмеченные уйдут в стопку" },
+  { keys: ["S"], label: "разбить серию на отдельные карты" },
 ];
 
 const ROWS: { keys: string[]; label: string }[] = [
@@ -29,10 +39,11 @@ const ROWS: { keys: string[]; label: string }[] = [
   { keys: ["Ctrl", "2"], label: "стол — разложить пачкой" },
 ];
 
-export function KeyLegend({ muted, dupe = false }: { muted: boolean; dupe?: boolean }) {
+export function KeyLegend({ muted, dupe = false, face = "video" }: { muted: boolean; dupe?: boolean; face?: Face }) {
+  const rows = [...(dupe ? DUPE_ROWS : []), ...(face === "series" ? SERIES_ROWS : []), ...ROWS.filter((r) => face === "video" || !VIDEO_ONLY.has(r.label))];
   return (
     <div className="flex flex-col gap-1">
-      {(dupe ? [...DUPE_ROWS, ...ROWS] : ROWS).map((r) => (
+      {rows.map((r) => (
         <div key={r.label} className="flex items-center gap-3 text-[13px] text-dim">
           <span className="flex w-[104px] shrink-0 items-center gap-1">
             {r.keys.map((k, i) => (
@@ -49,7 +60,7 @@ export function KeyLegend({ muted, dupe = false }: { muted: boolean; dupe?: bool
   );
 }
 
-export function KeysHint({ muted, dupe = false }: { muted: boolean; dupe?: boolean }) {
+export function KeysHint({ muted, dupe = false, face = "video" }: { muted: boolean; dupe?: boolean; face?: Face }) {
   return (
     <div className="group relative">
       <div className="pointer-events-none fixed inset-0 z-20 bg-ground/30 opacity-0 backdrop-blur-md transition-opacity duration-200 ease-trail group-focus-within:opacity-100 group-hover:opacity-100" />
@@ -62,7 +73,7 @@ export function KeysHint({ muted, dupe = false }: { muted: boolean; dupe?: boole
       </button>
       <div className="pointer-events-none invisible absolute right-0 bottom-full z-30 pb-3 opacity-0 transition-[opacity,translate,visibility] duration-200 ease-trail translate-y-1 group-hover:pointer-events-auto group-hover:visible group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:visible group-focus-within:opacity-100 group-focus-within:translate-y-0">
         <div className="w-max rounded-[20px] border border-line bg-cosmic p-4 shadow-[0_20px_50px_rgb(0_0_0/35%)]">
-          <KeyLegend muted={muted} dupe={dupe} />
+          <KeyLegend muted={muted} dupe={dupe} face={face} />
         </div>
       </div>
     </div>

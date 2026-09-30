@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { media, type DupeGroup, type GroupItem } from "../../lib/ipc";
+import { isPhotoPath, media, type DupeGroup, type GroupItem } from "../../lib/ipc";
 import { plural } from "../../lib/plural";
 import { Button } from "../ui/Button";
 
@@ -157,7 +157,7 @@ export function DupesScreen({
               >
                 <div className="flex w-[200px] shrink-0 flex-col gap-1">
                   <div className="text-xs font-medium text-dim">{note(g)}</div>
-                  <div className="text-lg font-bold">{KIND[g.kind]}</div>
+                  <div className="text-lg font-bold">{g.kind === "same" && isPhotoPath(g.items[0]?.path ?? "") ? "Та же фотография" : KIND[g.kind]}</div>
                 </div>
                 <div className="flex min-w-0 flex-1 flex-wrap gap-3">
                   {g.items.map((it, ii) => (
@@ -176,7 +176,11 @@ export function DupesScreen({
                           ii === pick ? "outline-[1.5px] outline-offset-2 outline-fg outline-solid" : ""
                         }`}
                       >
-                        <video src={`${media(it.path)}#t=0.5`} muted preload="metadata" className="h-full w-full object-cover" />
+                        {isPhotoPath(it.path) ? (
+                          <img src={media(it.path)} alt="" draggable={false} className="h-full w-full object-cover" />
+                        ) : (
+                          <video src={`${media(it.path)}#t=0.5`} muted preload="metadata" className="h-full w-full object-cover" />
+                        )}
                       </span>
                       <span className="flex min-w-0 flex-col gap-[3px]">
                         <span className="truncate text-[13px] font-bold" title={it.path}>
@@ -195,7 +199,7 @@ export function DupesScreen({
         </div>
       )}
       <div className="text-[13px] text-dim">
-        ↑ ↓ — группа · ← → — какую оставить · Enter — остальные в Корзину · N — это разные видео · Ctrl Z — забрать
+        ↑ ↓ — группа · ← → — какую оставить · Enter — остальные в Корзину · N — это разные файлы · Ctrl Z — забрать
       </div>
     </div>
   );

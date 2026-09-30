@@ -10,9 +10,75 @@ function fit(zone: number, ratio: number): Size {
 }
 
 function ratioOf(card: CardData, measured: Record<number, number>) {
-  if (measured[card.id]) return measured[card.id];
-  if (card.width && card.height) return card.width / card.height;
-  return 9 / 16;
+  const r = measured[card.id] ?? (card.width && card.height ? card.width / card.height : card.kind === "photo" ? 4 / 3 : 9 / 16);
+  return card.kind === "photo" ? Math.max(0.62, Math.min(1.6, r)) : r;
+}
+
+const ext = (name: string) => name.split(".").pop()?.toUpperCase() ?? "";
+
+export type SeriesBadge = { index: number; count: number; span: string; marked: boolean };
+
+function PhotoFace({
+  card,
+  number,
+  onRatio,
+  onBroken,
+  broken,
+  series,
+}: {
+  series?: SeriesBadge;
+  card: CardData;
+  number: number;
+  onRatio: (r: number) => void;
+  onBroken: () => void;
+  broken: boolean;
+}) {
+  const failed = broken || card.stage === "broken";
+  return (
+    <div className="flex h-full flex-col gap-2.5 p-3">
+      <div className="flex items-center justify-between gap-3 px-1 pt-0.5 text-[#ececef]">
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="text-[22px] leading-none font-bold">{number}</span>
+          {series && (
+            <span className="truncate text-[13px] font-medium text-[#a2a2a9]">
+              снимок {series.index + 1} из {series.count}
+            </span>
+          )}
+        </span>
+        <span className="shrink-0 text-[11px] font-medium text-[#a2a2a9]">{series ? `Серия · ${series.span}` : `Фото · ${ext(card.fileName)}`}</span>
+      </div>
+      <div className="relative grid min-h-0 flex-1 place-items-center overflow-hidden rounded-2xl bg-[#141417]">
+        {!failed && (
+          <img
+            src={media(card.path)}
+            alt=""
+            draggable={false}
+            decoding="async"
+            className="max-h-full max-w-full rounded-md object-contain"
+            onLoad={(e) => {
+              const img = e.currentTarget;
+              if (img.naturalWidth && img.naturalHeight) onRatio(img.naturalWidth / img.naturalHeight);
+            }}
+            onError={onBroken}
+          />
+        )}
+        {series?.marked && (
+          <span className="absolute right-3.5 top-3.5 grid h-10 w-10 place-items-center rounded-full bg-[rgb(12_12_14/72%)]">
+            <svg width="24" height="26" viewBox="0 0 26 30" fill="none" stroke="#ececef" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 16c3 3 5 6 7 10C13 16 17 8 23 3" />
+            </svg>
+          </span>
+        )}
+        {failed && (
+          <div className="absolute inset-0 grid place-items-center p-4 text-center text-[13px] font-medium text-[#a2a2a9]">
+            {card.error ?? "Это фото не открывается внутри Sorter."}
+            <br />
+            Ctrl+O — открыть в просмотрщике
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function Face({
@@ -144,7 +210,9 @@ export function CardStack({
   onPress,
   onTogglePause,
   volume,
+  series,
 }: {
+  series?: SeriesBadge;
   volume: number;
   onTogglePause: () => void;
   cards: CardData[];
@@ -164,6 +232,15 @@ export function CardStack({
   const prevLandscape = useRef(landscape);
 
   useEffect(() => {
+    for (const card of cards.slice(1, 4)) {
+      if (card.kind !== "photo") continue;
+      const img = new Image();
+      img.src = media(card.path);
+      void img.decode().catch(() => undefined);
+    }
+  }, [cards]);
+
+  useEffect(() => {
     const turned = prevLandscape.current !== landscape;
     prevLandscape.current = landscape;
     if (!turned || !top.current || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
@@ -175,7 +252,7 @@ export function CardStack({
 
   return (
     <div className="relative grid shrink-0 place-items-center" style={{ width: zone, height: zone }}>
-      {cards.length > 1 && (
+      {(cards.length > 1 || (series?.count ?? 0) > 1) && (
         <>
           <div
             className="absolute rounded-[28px] bg-line transition-[width,height] duration-[320ms] ease-trail"
@@ -199,18 +276,29 @@ export function CardStack({
           }`}
           style={{ width: size.w, height: size.h }}
         >
-          <Face
-            card={card}
-            active={i === 0}
-            muted={muted}
-            paused={paused}
-            number={number + i}
-            broken={broken.has(card.id)}
-            onBroken={() => onBroken(card.id)}
-            onTogglePause={onTogglePause}
-            volume={volume}
-            onRatio={(r) => setMeasured((m) => (m[card.id] === r ? m : { ...m, [card.id]: r }))}
-          />
+          {card.kind === "photo" ? (
+            <PhotoFace
+              card={card}
+              series={i === 0 ? series : undefined}
+              number={number + i}
+              broken={broken.has(card.id)}
+              onBroken={() => onBroken(card.id)}
+              onRatio={(r) => setMeasured((m) => (m[card.id] === r ? m : { ...m, [card.id]: r }))}
+            />
+          ) : (
+            <Face
+              card={card}
+              active={i === 0}
+              muted={muted}
+              paused={paused}
+              number={number + i}
+              broken={broken.has(card.id)}
+              onBroken={() => onBroken(card.id)}
+              onTogglePause={onTogglePause}
+              volume={volume}
+              onRatio={(r) => setMeasured((m) => (m[card.id] === r ? m : { ...m, [card.id]: r }))}
+            />
+          )}
         </div>
       ))}
     </div>

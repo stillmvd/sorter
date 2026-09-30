@@ -33,6 +33,9 @@ fn mime(path: &Path) -> &'static str {
         Some("mov") => "video/quicktime",
         Some("avi") => "video/x-msvideo",
         Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("png") => "image/png",
+        Some("webp") => "image/webp",
+        Some("gif") => "image/gif",
         _ => "application/octet-stream",
     }
 }
@@ -93,7 +96,7 @@ pub fn serve(app: &AppHandle, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
                 .unwrap()
         }
         Some(_) => reply(StatusCode::RANGE_NOT_SATISFIABLE),
-        None if len > CHUNK * 4 => builder
+        None if len > CHUNK * 4 && !mime(&path).starts_with("image/") => builder
             .status(StatusCode::PARTIAL_CONTENT)
             .header(header::CONTENT_RANGE, format!("bytes 0-{}/{len}", CHUNK - 1))
             .body({
@@ -119,5 +122,7 @@ mod tests {
         assert_eq!(decode("G%3A%5Cvk%20videos%5C%D0%B0.mp4"), "G:\\vk videos\\а.mp4");
         assert!(inside(Path::new("G:\\vk videos\\a.mp4"), Path::new("g:\\VK videos")));
         assert!(!inside(Path::new("G:\\vk videos\\..\\x"), Path::new("G:\\vk videos")));
+        assert_eq!(mime(Path::new("a.PNG")), "image/png");
+        assert_eq!(mime(Path::new("a.webp")), "image/webp");
     }
 }

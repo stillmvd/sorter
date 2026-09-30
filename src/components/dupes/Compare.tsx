@@ -1,6 +1,6 @@
 import { Copy } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { media, type Card, type DupeView } from "../../lib/ipc";
+import { isPhotoPath, media, type Card, type DupeView } from "../../lib/ipc";
 import { Button } from "../ui/Button";
 
 type Side = {
@@ -157,18 +157,22 @@ export function Compare({
           return ["Обрезка:", `${span(from, from + (short.durationMs ?? 0))} из ${clock(longest)}`];
         })()
       : dupe.kind === "same"
-        ? ["Та же запись,", "другое качество"]
+        ? isPhotoPath(dupe.path)
+          ? ["Та же", "фотография"]
+          : ["Та же запись,", "другое качество"]
         : dupe.kind === "crop"
           ? ["Другое", "кадрирование"]
           : ["Точная", "копия"];
 
-  const rows = (s: Side, o: Side) => [
-    { k: "Разрешение", v: s.width && s.height ? `${s.width}×${s.height}` : "—", best: pixels(s) > pixels(o) },
-    { k: "Битрейт", v: bitrate(s) ? `${(bitrate(s) / 1e6).toFixed(1).replace(".", ",")} Мбит/с` : "—", best: bitrate(s) > bitrate(o) * 1.05 },
-    { k: "Длина", v: s.durationMs ? clock(s.durationMs) : "—", best: (s.durationMs ?? 0) > (o.durationMs ?? 0) + 1000 },
-    { k: "Размер", v: mb(s.size), best: false },
-    { k: "Снято", v: s.takenAt ? date(s.takenAt) : "—", best: false },
-  ];
+  const photo = isPhotoPath(dupe.path);
+  const rows = (s: Side, o: Side) =>
+    [
+      { k: "Разрешение", v: s.width && s.height ? `${s.width}×${s.height}` : "—", best: pixels(s) > pixels(o) },
+      { k: "Битрейт", v: bitrate(s) ? `${(bitrate(s) / 1e6).toFixed(1).replace(".", ",")} Мбит/с` : "—", best: bitrate(s) > bitrate(o) * 1.05 },
+      { k: "Длина", v: s.durationMs ? clock(s.durationMs) : "—", best: (s.durationMs ?? 0) > (o.durationMs ?? 0) + 1000 },
+      { k: "Размер", v: mb(s.size), best: photo && s.size > o.size * 1.05 },
+      { k: "Снято", v: s.takenAt ? date(s.takenAt) : "—", best: false },
+    ].filter((r) => !photo || (r.k !== "Битрейт" && r.k !== "Длина"));
 
   return (
     <div className="absolute inset-0 z-30 flex flex-col gap-[22px] rounded-[28px] bg-cosmic px-10 py-7">
@@ -201,18 +205,22 @@ export function Compare({
                   onClick={() => setPicked(i)}
                   className={`relative min-h-[200px] flex-1 overflow-hidden rounded-3xl bg-[#0c0c0e] ${picked === i ? "outline-[1.5px] outline-offset-4 outline-fg outline-solid" : ""}`}
                 >
-                  <video
-                    ref={(el) => {
-                      videos.current[i] = el;
-                    }}
-                    src={media(s.path)}
-                    autoPlay
-                    loop={i === master}
-                    muted
-                    playsInline
-                    preload="auto"
-                    className="absolute inset-0 h-full w-full object-contain"
-                  />
+                  {photo ? (
+                    <img src={media(s.path)} alt="" draggable={false} className="absolute inset-0 h-full w-full object-contain" />
+                  ) : (
+                    <video
+                      ref={(el) => {
+                        videos.current[i] = el;
+                      }}
+                      src={media(s.path)}
+                      autoPlay
+                      loop={i === master}
+                      muted
+                      playsInline
+                      preload="auto"
+                      className="absolute inset-0 h-full w-full object-contain"
+                    />
+                  )}
                   {picked === i && (
                     <span className="absolute top-3 right-3 inline-flex h-7 items-center gap-1.5 rounded-full bg-fg px-3 text-xs font-bold text-ink">
                       <svg width="14" height="16" viewBox="0 0 26 30" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
@@ -254,7 +262,7 @@ export function Compare({
         <div className="text-[13px] text-dim">Играют синхронно · ← → — выбрать, какую оставить</div>
         <div className="flex-1" />
         <Button variant="ghost" size={44} hotkey="N" onClick={onDismiss} className="text-dim">
-          Это разные видео
+          {isPhotoPath(dupe.path) ? "Это разные фото" : "Это разные видео"}
         </Button>
         <Button variant="primary" size={44} hotkey="Enter" onClick={() => onKeep(keep.mine)}>
           {action}

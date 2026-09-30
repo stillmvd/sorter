@@ -31,6 +31,118 @@ pub struct Print {
     pub frames: Vec<u64>,
     pub audio: Vec<u32>,
     pub stills: Vec<RgbImage>,
+    pub look: Vec<u8>,
+}
+
+pub const LOOK_SIDE: u32 = 128;
+
+pub fn look_of(img: &RgbImage) -> Vec<u8> {
+    let g = imageops::grayscale(img);
+    let (w, h) = g.dimensions();
+    let s = LOOK_SIDE as f32 / w.max(h).max(1) as f32;
+    let (nw, nh) = (((w as f32 * s).round() as u32).clamp(16, LOOK_SIDE), ((h as f32 * s).round() as u32).clamp(16, LOOK_SIDE));
+    let mut out = vec![nw as u8, nh as u8];
+    out.extend(imageops::resize(&g, nw, nh, imageops::FilterType::Triangle).into_raw());
+    out
+}
+
+struct Plane {
+    w: usize,
+    h: usize,
+    pix: Vec<f32>,
+}
+
+impl Plane {
+    fn parse(v: &[u8]) -> Option<Plane> {
+        let (w, h) = (*v.first()? as usize, *v.get(1)? as usize);
+        (w >= 16 && h >= 16 && v.len() == 2 + w * h).then(|| Plane { w, h, pix: v[2..].iter().map(|p| *p as f32).collect() })
+    }
+
+    fn half(&self) -> Plane {
+        let (w, h) = (self.w / 2, self.h / 2);
+        let mut pix = vec![0f32; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let at = |dx: usize, dy: usize| self.pix[(y * 2 + dy) * self.w + x * 2 + dx];
+                pix[y * w + x] = (at(0, 0) + at(1, 0) + at(0, 1) + at(1, 1)) / 4.0;
+            }
+        }
+        Plane { w, h, pix }
+    }
+
+    fn at(&self, x: f32, y: f32) -> f32 {
+        let x = (x - 0.5).clamp(0.0, (self.w - 1) as f32);
+        let y = (y - 0.5).clamp(0.0, (self.h - 1) as f32);
+        let (x0, y0) = (x.floor() as usize, y.floor() as usize);
+        let (x1, y1) = ((x0 + 1).min(self.w - 1), (y0 + 1).min(self.h - 1));
+        let (fx, fy) = (x - x0 as f32, y - y0 as f32);
+        let p = |x: usize, y: usize| self.pix[y * self.w + x];
+        (p(x0, y0) * (1.0 - fx) + p(x1, y0) * fx) * (1.0 - fy) + (p(x0, y1) * (1.0 - fx) + p(x1, y1) * fx) * fy
+    }
+
+    fn grid(&self, cells: usize, x0: f32, y0: f32, rw: f32, rh: f32) -> Vec<f32> {
+        let (cw, ch) = (rw / cells as f32, rh / cells as f32);
+        let mut out: Vec<f32> = (0..cells * cells)
+            .map(|k| {
+                let (cx, cy) = (x0 + (k % cells) as f32 * cw, y0 + (k / cells) as f32 * ch);
+                [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)].iter().map(|(u, v)| self.at(cx + u * cw, cy + v * ch)).sum::<f32>() / 4.0
+            })
+            .collect();
+        let n = out.len() as f32;
+        let mean = out.iter().sum::<f32>() / n;
+        let sd = (out.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / n).sqrt().max(1e-3);
+        out.iter_mut().for_each(|v| *v = (*v - mean) / sd);
+        out
+    }
+}
+
+fn corr(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>() / a.len() as f32
+}
+
+pub fn contains(big: &[u8], small: &[u8]) -> (f32, f32) {
+    let (Some(big), Some(small)) = (Plane::parse(big), Plane::parse(small)) else { return (0.0, 1.0) };
+    let aspect = small.h as f32 / small.w as f32;
+    let (hb, hs) = (big.half(), small.half());
+    let target = hs.grid(16, 0.0, 0.0, hs.w as f32, hs.h as f32);
+    let mut coarse = (f32::MIN, 0.0f32, 0.0f32, hb.w as f32);
+    for rw in (hb.w / 2).max(8)..=hb.w {
+        let rw = rw as f32;
+        let rh = rw * aspect;
+        if rh > hb.h as f32 + 0.5 {
+            continue;
+        }
+        let rh = rh.min(hb.h as f32);
+        let (mut y, ymax, xmax) = (0.0f32, hb.h as f32 - rh, hb.w as f32 - rw);
+        while y <= ymax {
+            let mut x = 0.0f32;
+            while x <= xmax {
+                let c = corr(&hb.grid(16, x, y, rw, rh), &target);
+                if c > coarse.0 {
+                    coarse = (c, x, y, rw);
+                }
+                x += 1.0;
+            }
+            y += 1.0;
+        }
+    }
+    let target = small.grid(48, 0.0, 0.0, small.w as f32, small.h as f32);
+    let (_, cx, cy, crw) = (coarse.0, coarse.1 * 2.0, coarse.2 * 2.0, coarse.3 * 2.0);
+    let mut best = (0.0f32, 1.0f32);
+    for dw in [-1.0f32, 0.0, 1.0] {
+        let rw = (crw + dw).clamp(16.0, big.w as f32);
+        let rh = (rw * aspect).min(big.h as f32);
+        for dy in [-1.0f32, -0.5, 0.0, 0.5, 1.0] {
+            for dx in [-1.0f32, -0.5, 0.0, 0.5, 1.0] {
+                let (x, y) = ((cx + dx).clamp(0.0, big.w as f32 - rw), (cy + dy).clamp(0.0, big.h as f32 - rh));
+                let c = corr(&big.grid(48, x, y, rw, rh), &target);
+                if c > best.0 {
+                    best = (c, rw / big.w as f32);
+                }
+            }
+        }
+    }
+    best
 }
 
 pub fn bbox(grays: &[GrayImage]) -> [f32; 4] {
@@ -194,7 +306,28 @@ impl Resampler {
     }
 }
 
+pub fn print_photo(path: &Path) -> Option<Print> {
+    let m = crate::photo::read(path).ok()?;
+    let gray = imageops::resize(&imageops::grayscale(&m.thumb), GRID, GRID, imageops::FilterType::Triangle);
+    let b = bbox(std::slice::from_ref(&gray));
+    Some(Print {
+        duration_ms: 0,
+        width: m.width,
+        height: m.height,
+        rotation: 0,
+        bitrate: 0,
+        bbox: b,
+        frames: vec![phash(&gray, b)],
+        audio: Vec::new(),
+        look: look_of(&crop_rgb(&m.thumb, b)),
+        stills: vec![crop_rgb(&m.thumb, b)],
+    })
+}
+
 pub fn print(path: &Path) -> Option<Print> {
+    if crate::deck::is_photo(path) {
+        return print_photo(path);
+    }
     #[cfg(windows)]
     let d = mf::decode(path).ok()?;
     #[cfg(not(windows))]
@@ -214,6 +347,7 @@ pub fn print(path: &Path) -> Option<Print> {
         frames: d.grays.iter().map(|g| phash(g, b)).collect(),
         audio: audio_print(&d.mono),
         stills: d.stills.iter().map(|s| crop_rgb(s, b)).collect(),
+        look: Vec::new(),
     })
 }
 

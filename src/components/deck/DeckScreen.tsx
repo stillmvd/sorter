@@ -1,7 +1,11 @@
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Copy, Folder, FolderOpen, History, LayoutGrid, Layers, Plus, Settings } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
-import { errorText, ipc, onCard, onDeckChanged, onDupesChanged, onPilesChanged, onProgress, type AppState, type Card, type DupeGroup, type DupeGroups, type DupeView, type GroupItem, type Method, type Move, type Pile } from "../../lib/ipc";
+import { errorText, ipc, onCard, onDeckChanged, onDupesChanged, onPilesChanged, onProgress, onSeries, type AppState, type Card, type DupeGroup, type DupeGroups, type DupeView, type GroupItem, type Kind, type Method, type Move, type Pile, type SeriesView } from "../../lib/ipc";
+import { SeriesPanel, seriesSpan, type Rest } from "./SeriesPanel";
+import { KindFilter } from "../ui/KindFilter";
+import { isPhotoPath } from "../../lib/ipc";
+import { PhotoFacts } from "./PhotoFacts";
 import { isTypingChar, keyOf } from "../../lib/keys";
 import { cardsWord, plural } from "../../lib/plural";
 import { useHints } from "../../lib/useHints";
@@ -40,6 +44,19 @@ const modes = (dupes: number): { value: Mode; label: string; hint: string }[] =>
 ];
 
 const MODE_KEYS: Record<string, Mode> = { Digit1: "deck", Digit2: "table", Digit3: "dupes" };
+
+type Counts = AppState["deck"];
+
+function shift(c: Counts, list: Card[], sign: number): Counts {
+  const byKind = { video: { ...c.byKind.video }, photo: { ...c.byKind.photo } };
+  for (const card of list) {
+    byKind[card.kind].left -= sign;
+    byKind[card.kind].placed += sign;
+  }
+  return { ...c, left: c.left - sign * list.length, placed: c.placed + sign * list.length, byKind };
+}
+
+const KIND_WORD: Record<Kind, string> = { all: "", video: "видео", photo: "фото" };
 
 function rank(piles: Pile[], query: string) {
   const q = query.trim().toLowerCase();
@@ -80,6 +97,26 @@ export function DeckScreen({
   const [flights, setFlights] = useState<Flight[]>([]);
   const [developing, setDeveloping] = useState(initial.developing);
   const [mode, setMode] = useState<Mode>(initial.settings.mode === "table" || initial.settings.mode === "dupes" ? initial.settings.mode : "deck");
+  const [kind, setKind] = useState<Kind>(() => {
+    const k = initial.settings.kind_filter;
+    return k === "video" || k === "photo" ? k : "all";
+  });
+  const kindRef = useRef(kind);
+  kindRef.current = kind;
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const [seriesList, setSeriesList] = useState<SeriesView[]>([]);
+  const seriesMap = useMemo(() => new Map(seriesList.map((s) => [s.id, s])), [seriesList]);
+  const [focus, setFocus] = useState(0);
+  const [marked, setMarked] = useState<Set<number>>(() => new Set());
+  const [rest, setRest] = useState<Rest>(initial.settings.series_rest === "keep" ? "keep" : "trash");
+  const loadSeries = useCallback(async () => {
+    try {
+      setSeriesList(await ipc.deckSeries());
+    } catch {
+      setSeriesList([]);
+    }
+  }, []);
   const [groups, setGroups] = useState<DupeGroups | null>(null);
   const [filter, setFilter] = useState<Filter | null>(null);
   const [sheet, setSheet] = useState<Card[]>([]);
@@ -150,13 +187,13 @@ export function DeckScreen({
   );
 
   const refill = useCallback(async () => {
-    const fresh = await ipc.deckWindow(0, 30);
+    const fresh = await ipc.deckWindow(0, 30, kindRef.current);
     setCards(fresh.filter((c) => !pending.current.has(c.id)));
     setLoaded(true);
   }, []);
 
   const loadSheet = useCallback(async () => {
-    const all = await ipc.deckWindow(0, 100000);
+    const all = await ipc.deckWindow(0, 100000, kindRef.current);
     const fresh = all.filter((c) => !pending.current.has(c.id));
     setSheet(fresh);
     setSelected((sel) => new Set(fresh.filter((c) => sel.has(c.id)).map((c) => c.id)));
@@ -166,7 +203,8 @@ export function DeckScreen({
   useEffect(() => {
     if (mode === "table") void loadSheet();
     else void refill();
-  }, [mode, refill, loadSheet]);
+    void loadSeries();
+  }, [mode, kind, refill, loadSheet, loadSeries]);
 
   useEffect(() => {
     void ipc.getState().then((st) => {
@@ -189,7 +227,13 @@ export function DeckScreen({
       void ipc.getState().then((st) => setCounts(st.deck));
     });
     const offPiles = onPilesChanged(setPiles);
+    const offSeries = onSeries(() => {
+      void loadSeries();
+      if (modeRef.current === "table") void loadSheet();
+      else void refill();
+    });
     return () => {
+      void offSeries.then((f) => f());
       void offDeck.then((f) => f());
       void offPiles.then((f) => f());
       void offCard.then((f) => f());
@@ -217,9 +261,32 @@ export function DeckScreen({
 
   const matches = useMemo(() => rank(piles, query), [piles, query]);
   const current = cards[0];
+  const cur = current && current.seriesId === current.id ? seriesMap.get(current.id) : undefined;
+  const focusCard = cur ? (cur.cards[focus] ?? cur.cards[0]) : undefined;
+  const shownCards = useMemo(() => (cur && focusCard ? [focusCard, ...cards.slice(1)] : cards), [cur, focusCard, cards]);
+  const bestOf = useCallback((s: SeriesView) => s.cards.find((x) => x.id === s.best) ?? s.cards[0], []);
+  const sheetShown = useMemo(
+    () =>
+      sheet.map((c) => {
+        const s = c.seriesId === c.id ? seriesMap.get(c.id) : undefined;
+        return s ? bestOf(s) : c;
+      }),
+    [sheet, seriesMap, bestOf],
+  );
+  const seriesByShown = useMemo(() => new Map(seriesList.map((s) => [s.best, s])), [seriesList]);
+  const seriesCounts = useMemo(() => new Map(seriesList.map((s) => [s.best, s.cards.length])), [seriesList]);
+  const sheetShownRef = useRef(sheetShown);
+  sheetShownRef.current = sheetShown;
+  const seriesByShownRef = useRef(seriesByShown);
+  seriesByShownRef.current = seriesByShown;
+  useEffect(() => {
+    if (!cur) return;
+    setFocus(Math.max(0, cur.cards.findIndex((c) => c.id === cur.best)));
+    setMarked(new Set([cur.best]));
+  }, [cur?.id, cur?.cards.length, cur?.best]);
   const hintIds = useMemo(
-    () => (mode === "deck" ? (current ? [current.id] : []) : sheet.filter((c) => selected.has(c.id)).map((c) => c.id)),
-    [mode, current, sheet, selected],
+    () => (mode === "deck" ? (cur ? [cur.best] : current ? [current.id] : []) : sheetShown.filter((c) => selected.has(c.id)).map((c) => c.id)),
+    [mode, current, cur, sheetShown, selected],
   );
   const hints = useHints(hintIds, piles);
   const hintPile = hints.hints[0] ? (piles.find((p) => p.id === hints.hints[0].pileId) ?? null) : null;
@@ -243,7 +310,7 @@ export function DeckScreen({
       setPaused(false);
       pending.current.add(card.id);
       setCards((cs) => cs.filter((c) => c.id !== card.id));
-      setCounts((c) => ({ ...c, left: c.left - 1, placed: c.placed + 1 }));
+      setCounts((c) => shift(c, [card], 1));
       setQuery("");
       search.current?.blur();
       try {
@@ -255,23 +322,24 @@ export function DeckScreen({
       } catch (e) {
         play("error");
         setCards((cs) => [card, ...cs.filter((c) => c.id !== card.id)]);
-        setCounts((c) => ({ ...c, left: c.left + 1, placed: c.placed - 1 }));
+        setCounts((c) => shift(c, [card], -1));
         setToast(errorText(e));
       } finally {
         pending.current.delete(card.id);
       }
-      if (cardsRef.current.length < 12) void refill();
+      if (cardsRef.current.length < 12 || current?.kind === "photo") void refill();
     },
-    [refill],
+    [refill, current?.kind],
   );
 
   const placeBatch = useCallback(
     async (pile: Pile, method: Method) => {
-      const batch = sheetRef.current.filter((c) => selectedRef.current.has(c.id));
-      if (!batch.length) {
+      const picked = sheetShownRef.current.filter((c) => selectedRef.current.has(c.id));
+      if (!picked.length) {
         setToast("Сначала отметь плёнки: клик — одна, Shift клик — диапазон, Ctrl A — все на экране.");
         return;
       }
+      const batch = picked.flatMap((c) => seriesByShownRef.current.get(c.id)?.cards ?? [c]);
       const ids = batch.map((c) => c.id);
       play(pile.isTrash ? "trash" : method === "new_pile" ? "new_pile" : batch.length > 1 ? "batch" : "place");
       shake(pile.id);
@@ -279,7 +347,7 @@ export function DeckScreen({
       setSheet((cs) => cs.filter((c) => !ids.includes(c.id)));
       setCards((cs) => cs.filter((c) => !ids.includes(c.id)));
       setSelected(new Set());
-      setCounts((c) => ({ ...c, left: c.left - ids.length, placed: c.placed + ids.length }));
+      setCounts((c) => shift(c, batch, 1));
       setQuery("");
       search.current?.blur();
       let failed = false;
@@ -292,7 +360,7 @@ export function DeckScreen({
       } catch (e) {
         failed = true;
         play("error");
-        setCounts((c) => ({ ...c, left: c.left + ids.length, placed: c.placed - ids.length }));
+        setCounts((c) => shift(c, batch, -1));
         setToast(errorText(e));
       } finally {
         ids.forEach((id) => pending.current.delete(id));
@@ -380,11 +448,52 @@ export function DeckScreen({
 
   const put = useCallback(
     (pile: Pile, method: Method) => {
+      if (mode === "deck" && cur) {
+        const keep = [...marked].filter((id) => cur.cards.some((c) => c.id === id));
+        return place(pile, method, () => ipc.placeSeries(cur.id, keep, pile.id, rest, method)).then(() => {
+          void loadSeries();
+          void refill();
+        });
+      }
       if (mode === "deck") return place(pile, method);
       return placeBatch(pile, method === "key" || method === "search" ? "table" : method);
     },
-    [mode, place, placeBatch],
+    [mode, cur, marked, rest, place, placeBatch, loadSeries, refill],
   );
+
+  const splitSeries = useCallback(async () => {
+    if (!cur) return;
+    try {
+      await ipc.splitSeries(cur.id);
+      play("defer");
+      await loadSeries();
+      await refill();
+    } catch (e) {
+      setToast(errorText(e));
+    }
+  }, [cur, loadSeries, refill]);
+
+  const changeRest = useCallback((r: Rest) => {
+    setRest(r);
+    void ipc.setSetting("series_rest", r);
+  }, []);
+
+  const toggleMark = useCallback((id: number) => {
+    setMarked((m) => {
+      const next = new Set(m);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const switchKind = useCallback((next: Kind) => {
+    setKind(next);
+    setQuery("");
+    setPaused(false);
+    setSelected(new Set());
+    void ipc.setSetting("kind_filter", next);
+  }, []);
 
   const switchMode = useCallback((next: Mode) => {
     setMode(next);
@@ -462,7 +571,9 @@ export function DeckScreen({
       }
       play("undo");
       const back = r.cards;
-      setCards((cs) => [...back, ...cs.filter((c) => !back.some((b) => b.id === c.id))]);
+      if (back.some((c) => c.kind === "photo")) await refill();
+      else setCards((cs) => [...back, ...cs.filter((c) => !back.some((b) => b.id === c.id))]);
+      void loadSeries();
       void ipc.getState().then((st) => setCounts(st.deck));
       setPiles(r.piles);
       if (mode === "table") {
@@ -476,7 +587,7 @@ export function DeckScreen({
       play("error");
       setToast(errorText(e));
     }
-  }, [mode, loadSheet, loadGroups]);
+  }, [mode, loadSheet, loadGroups, refill, loadSeries]);
 
   const defer = useCallback(async () => {
     const card = cardsRef.current[0];
@@ -524,7 +635,7 @@ export function DeckScreen({
     if (menu) return;
     const active = document.activeElement;
     const inSearch = active === search.current;
-    const focus = mode === "deck" ? current : sheet.find((c) => selected.has(c.id));
+    const focused = mode === "deck" ? (focusCard ?? current) : sheetShown.find((c) => selected.has(c.id));
     if (e.ctrlKey && MODE_KEYS[e.code]) {
       e.preventDefault();
       switchMode(MODE_KEYS[e.code]);
@@ -553,12 +664,12 @@ export function DeckScreen({
     if (mode === "dupes") return;
     if (e.ctrlKey && e.code === "KeyE") {
       e.preventDefault();
-      if (focus) void revealItemInDir(focus.path);
+      if (focused) void revealItemInDir(focused.path);
       return;
     }
     if (e.ctrlKey && e.code === "KeyO") {
       e.preventDefault();
-      if (focus) void openPath(focus.path);
+      if (focused) void openPath(focused.path);
       return;
     }
     if (e.ctrlKey || e.altKey || e.metaKey) return;
@@ -587,9 +698,27 @@ export function DeckScreen({
       return;
     }
     if (mode === "table" && (e.key === " " || e.key === "Tab" || e.key.startsWith("Arrow"))) return;
+    if (cur && focusCard) {
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        const n = cur.cards.length;
+        setFocus((f) => (f + (e.key === "ArrowLeft" ? n - 1 : 1)) % n);
+        return;
+      }
+      if (e.key === " ") {
+        e.preventDefault();
+        toggleMark(focusCard.id);
+        return;
+      }
+      if (keyOf(e) === "S") {
+        e.preventDefault();
+        void splitSeries();
+        return;
+      }
+    }
     if (e.key === " ") {
       e.preventDefault();
-      setPaused((p) => !p);
+      if (current?.kind !== "photo") setPaused((p) => !p);
       return;
     }
     if (e.key === "Tab") {
@@ -602,7 +731,7 @@ export function DeckScreen({
       changeVolume((muted ? 0 : volume) + (e.key === "ArrowUp" ? 0.1 : -0.1));
       return;
     }
-    if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && current) {
+    if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && current?.kind === "video") {
       e.preventDefault();
       seekFrame(current, e.key === "ArrowLeft" ? -1 : 1);
       return;
@@ -645,7 +774,13 @@ export function DeckScreen({
 
   const number = counts.placed + 1;
   const empty = mode === "deck" ? loaded && !current : sheetLoaded && sheet.length === 0;
-  const picked = sheet.reduce((n, c) => n + Number(selected.has(c.id)), 0);
+  const kindCounts: Record<Kind, number> = { all: counts.left, video: counts.byKind.video.left, photo: counts.byKind.photo.left };
+  const mixed = counts.byKind.video.left + counts.byKind.video.placed > 0 && counts.byKind.photo.left + counts.byKind.photo.placed > 0;
+  const shown = kind === "all" ? counts : counts.byKind[kind];
+  const other: Kind | null = kind === "video" ? "photo" : kind === "photo" ? "video" : null;
+  const restLeft = other ? counts.byKind[other].left : 0;
+  const picked = sheetShown.reduce((n, c) => n + Number(selected.has(c.id)), 0);
+  const pickedFiles = sheetShown.reduce((n, c) => n + (selected.has(c.id) ? (seriesCounts.get(c.id) ?? 1) : 0), 0);
   const sure = groups?.groups.filter((g) => g.confidence >= SURE).length ?? 0;
 
   if (empty && mode !== "dupes")
@@ -659,6 +794,16 @@ export function DeckScreen({
           tablePath={initial.settings.table_path ?? ""}
           hintsOn={initial.settings.hints_enabled !== "0"}
           onJournal={onJournal}
+          rest={
+            other && restLeft > 0
+              ? {
+                  gone: kind === "photo" ? "Фото" : "Видео",
+                  left: `${restLeft} ${KIND_WORD[other]}`,
+                  show: other === "photo" ? "Показать фото" : "Показать видео",
+                  onShow: () => switchKind(other),
+                }
+              : undefined
+          }
         />
       </main>
     );
@@ -675,28 +820,30 @@ export function DeckScreen({
             </Tag>
           ) : mode === "deck" ? (
             <Tag icon={<Layers strokeWidth={1.5} />}>
-              Разложено {counts.placed} из {counts.placed + counts.left}
+              Разложено {shown.placed} из {shown.placed + shown.left}
+              {kind !== "all" && ` ${KIND_WORD[kind]}`}
               {developing.done < developing.total && ` · проявлено ${developing.done} из ${developing.total}`}
             </Tag>
           ) : (
             <Tag icon={<LayoutGrid strokeWidth={1.5} />}>
-              Стол · {onScreen} из {sheet.length} на экране · веди мышью по плитке — перемотка
+              Стол · {onScreen} из {sheet.length} на экране{kind !== "photo" && " · веди мышью по плитке — перемотка"}
               {developing.done < developing.total && ` · проявлено ${developing.done} из ${developing.total}`}
             </Tag>
           )
         }
-        light={mode === "dupes" ? "Дубли," : mode === "deck" ? "В колоде" : "На столе,"}
+        light={mode === "dupes" ? "Дубли," : mode === "deck" ? (kind === "photo" ? "Фото в колоде" : kind === "video" ? "Видео в колоде" : "В колоде") : "На столе,"}
         bold={
           mode === "dupes"
             ? `${sure} ${plural(sure, "группа", "группы", "групп")}`
             : mode === "deck"
-              ? String(Math.max(counts.left, 0))
+              ? String(Math.max(shown.left, 0))
               : picked
                 ? `отмечено ${picked}`
                 : cardsWord(sheet.length)
         }
         actions={
           <>
+            {mixed && <KindFilter value={kind} counts={kindCounts} onChange={switchKind} />}
             <Segment label="Режим" options={modes(sure)} value={mode} onChange={switchMode} />
             <IconButton label="Журнал" hint="Журнал ходов — Ctrl J" onClick={onJournal}>
               <History size={18} strokeWidth={1.5} />
@@ -714,7 +861,7 @@ export function DeckScreen({
 
       {mode === "dupes" ? (
         <DupesScreen
-          groups={groups?.groups ?? []}
+          groups={(groups?.groups ?? []).filter((g) => kind === "all" || isPhotoPath(g.items[0]?.path ?? "") === (kind === "photo"))}
           filter={filter}
           onFilter={setFilter}
           onKeep={(_: GroupItem, drop: GroupItem[]) => void trashPaths(drop.map((d) => d.path))}
@@ -723,7 +870,8 @@ export function DeckScreen({
         />
       ) : mode === "table" ? (
         <ContactSheet
-          cards={sheet}
+          cards={sheetShown}
+          series={seriesCounts}
           selected={selected}
           cacheDir={initial.cacheDir}
           onSelect={setSelected}
@@ -735,7 +883,17 @@ export function DeckScreen({
           <LastMove move={last} onUndo={undo} />
           {current && (
             <CardStack
-              cards={cards}
+              cards={shownCards}
+              series={
+                cur
+                  ? {
+                      index: focus,
+                      count: cur.cards.length,
+                      span: (({ from, to }) => `${from} – ${to}`)(seriesSpan(cur)),
+                      marked: focusCard ? marked.has(focusCard.id) : false,
+                    }
+                  : undefined
+              }
               number={number}
               zone={zone}
               muted={muted}
@@ -751,28 +909,46 @@ export function DeckScreen({
             <div className="flex min-w-0 flex-1 flex-col justify-center-safe gap-3 overflow-y-auto">
               <div className="flex flex-col gap-1">
                 <div className="flex min-w-0 items-center gap-2">
-                  <div className="truncate text-lg font-bold">{current.fileName}</div>
+                  <div className="truncate text-lg font-bold">{(focusCard ?? current).fileName}</div>
                   <button
                     type="button"
                     aria-label="Показать в проводнике"
                     title="Показать в проводнике — Ctrl E"
-                    onClick={() => revealItemInDir(current.path)}
+                    onClick={() => revealItemInDir((focusCard ?? current).path)}
                     className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-dim transition-colors duration-200 ease-trail hover:bg-raised hover:text-fg"
                   >
                     <FolderOpen className="h-4 w-4" strokeWidth={1.5} />
                   </button>
                 </div>
-                <div className="text-[13px] font-medium text-dim">
-                  {[
-                    current.takenAt ? date(current.takenAt) : null,
-                    mb(current.size),
-                    current.width && current.height ? `${current.width}×${current.height}` : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </div>
+                {current.kind === "video" && (
+                  <div className="text-[13px] font-medium text-dim">
+                    {[
+                      current.takenAt ? date(current.takenAt) : null,
+                      mb(current.size),
+                      current.width && current.height ? `${current.width}×${current.height}` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </div>
+                )}
               </div>
-              <FilmStrip card={current} cacheDir={initial.cacheDir} />
+              {cur ? (
+                <SeriesPanel
+                  series={cur}
+                  cacheDir={initial.cacheDir}
+                  focus={focus}
+                  marked={marked}
+                  rest={rest}
+                  onFocus={setFocus}
+                  onToggle={toggleMark}
+                  onRest={changeRest}
+                  onSplit={() => void splitSeries()}
+                />
+              ) : current.kind === "photo" ? (
+                <PhotoFacts card={current} />
+              ) : (
+                <FilmStrip card={current} cacheDir={initial.cacheDir} />
+              )}
               {dupe ? (
                 <DupeBadge
                   dupe={dupe}
@@ -787,7 +963,12 @@ export function DeckScreen({
                   onDefer={() => void defer()}
                 />
               ) : (
-                <HintBox hints={hints} piles={piles} onPlace={(p) => put(p, "hint")} />
+                <HintBox
+                  hints={hints}
+                  piles={piles}
+                  onPlace={(p) => put(p, "hint")}
+                  lead={cur ? (marked.size ? `Отмеченные ${marked.size} просятся в стопку` : "Серия просится в стопку") : undefined}
+                />
               )}
               <div className="flex flex-wrap items-center gap-2">
                 {!dupe && (
@@ -795,13 +976,13 @@ export function DeckScreen({
                     В конец колоды
                   </Button>
                 )}
-                {broken.has(current.id) && (
+                {(broken.has(current.id) || current.stage === "broken") && (
                   <Button onClick={() => openPath(current.path)} hotkey="Ctrl O">
-                    Открыть в плеере
+                    {current.kind === "photo" ? "Открыть в просмотрщике" : "Открыть в плеере"}
                   </Button>
                 )}
                 <div className="flex-1" />
-                <VolumeRow muted={muted} volume={volume} onMute={toggleMute} onVolume={changeVolume} />
+                {current.kind === "video" && <VolumeRow muted={muted} volume={volume} onMute={toggleMute} onVolume={changeVolume} />}
               </div>
             </div>
           )}
@@ -812,7 +993,10 @@ export function DeckScreen({
       <>
       <div className="flex items-center gap-3">
         {mode === "table" && picked > 0 ? (
-          <span className="flex h-9 shrink-0 items-center rounded-full bg-fg px-3.5 text-[13px] font-bold text-ink">Отмечено {picked}</span>
+          <span className="flex h-9 shrink-0 items-center rounded-full bg-fg px-3.5 text-[13px] font-bold text-ink">
+            Отмечено {picked}
+            {pickedFiles !== picked && ` · ${pickedFiles} ${plural(pickedFiles, "файл", "файла", "файлов")}`}
+          </span>
         ) : (
           <div className="shrink-0 text-[13px] font-medium text-dim">Стопки · {piles.filter((p) => !p.isTrash).length}</div>
         )}
@@ -838,7 +1022,9 @@ export function DeckScreen({
                 ? hintPile
                   ? `Просятся в «${hintPile.name}» ${Math.round(hints.hints[0].score * 100)}% — Enter · клавиша стопки — в другую · Esc — снять отметки`
                   : "Клавиша стопки — положить отмеченные · Esc — снять отметки"
-                : "Клик — отметить · Shift клик — диапазон · Ctrl A — все на экране"}
+                : seriesCounts.size
+                  ? "Клик — отметить · серия уходит вся · выбрать лучшие — в колоде"
+                  : "Клик — отметить · Shift клик — диапазон · Ctrl A — все на экране"}
             </span>
           )
         )}
@@ -856,7 +1042,7 @@ export function DeckScreen({
           Новая стопка
         </Button>
         )}
-        {mode === "deck" && <KeysHint muted={muted} dupe={!!dupe} />}
+        {mode === "deck" && <KeysHint muted={muted} dupe={!!dupe} face={cur ? "series" : current?.kind === "photo" ? "photo" : "video"} />}
       </div>
       {piles.filter((p) => !p.isTrash).length === 0 && (
         <p className="m-0 -mb-2 text-[13px] text-dim">Стопок пока нет. Напечатай название и нажми Shift Enter — создашь первую.</p>

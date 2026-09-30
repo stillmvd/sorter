@@ -11,7 +11,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
+use crate::series::{self, SeriesView};
 
 pub struct AppState {
     pub db: Mutex<Connection>,
@@ -21,7 +22,9 @@ pub struct AppState {
     pub incoming: Mutex<Option<String>>,
 }
 
-const SETTING_KEYS: [&str; 8] = ["deck_path", "table_path", "hints_enabled", "theme", "muted", "mode", "volume", "updates"];
+const USER_KEYS: [&str; 8] = ["hints_enabled", "theme", "muted", "mode", "volume", "updates", "kind_filter", "series_rest"];
+const SETTING_KEYS: [&str; 10] =
+    ["deck_path", "table_path", "hints_enabled", "theme", "muted", "mode", "volume", "updates", "kind_filter", "series_rest"];
 
 impl AppState {
     pub fn conn(&self) -> MutexGuard<'_, Connection> {
@@ -55,6 +58,13 @@ pub struct DeckCounts {
     total: i64,
     left: i64,
     placed: i64,
+    by_kind: ByKind,
+}
+
+#[derive(Serialize, Default)]
+pub struct ByKind {
+    video: deck::KindCounts,
+    photo: deck::KindCounts,
 }
 
 #[derive(Serialize)]
@@ -85,9 +95,10 @@ fn snapshot(conn: &Connection, state: &AppState) -> AppResult<StateView> {
     let (deck, piles) = match paths(conn) {
         Ok((d, t)) => {
             let (left, placed) = deck::counts(conn, &d)?;
-            (DeckCounts { total: left + placed, left, placed }, piles::list(conn, &t)?)
+            let (video, photo) = deck::counts_by_kind(conn, &d)?;
+            (DeckCounts { total: left + placed, left, placed, by_kind: ByKind { video, photo } }, piles::list(conn, &t)?)
         }
-        Err(_) => (DeckCounts { total: 0, left: 0, placed: 0 }, Vec::new()),
+        Err(_) => (DeckCounts { total: 0, left: 0, placed: 0, by_kind: ByKind::default() }, Vec::new()),
     };
     let (done, total) = match get_setting(conn, "deck_path")? {
         Some(d) => conn.query_row(
@@ -172,7 +183,7 @@ pub fn choose_table(state: State<AppState>, path: String) -> AppResult<Vec<PileV
 
 #[tauri::command]
 pub fn set_setting_cmd(app: tauri::AppHandle, state: State<AppState>, key: String, value: String) -> AppResult<()> {
-    if !["hints_enabled", "theme", "muted", "mode", "volume", "updates"].contains(&key.as_str()) {
+    if !USER_KEYS.contains(&key.as_str()) {
         return Err(AppError::new("BAD_SETTING", "Такой настройки нет."));
     }
     set_setting(&state.conn(), &key, &value)?;
@@ -195,10 +206,19 @@ pub fn folder_arg<I: IntoIterator<Item = String>>(args: I) -> Option<String> {
 }
 
 #[tauri::command]
-pub fn deck_window(state: State<AppState>, from: i64, count: i64) -> AppResult<Vec<CardView>> {
+pub fn deck_window(state: State<AppState>, from: i64, count: i64, kind: Option<String>) -> AppResult<Vec<CardView>> {
     let conn = state.conn();
     let (d, _) = paths(&conn)?;
-    deck::window(&conn, &d, from, count)
+    let kind = kind.filter(|k| k == "video" || k == "photo").unwrap_or_else(|| "all".into());
+    deck::window(&conn, &d, from, count, &kind)
+}
+
+fn regroup(app: &AppHandle, conn: &Connection) {
+    if let Ok((d, _)) = paths(conn) {
+        if series::regroup(conn, &d).unwrap_or(false) {
+            let _ = app.emit("deck://series", ());
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -210,10 +230,11 @@ pub struct Placed {
 }
 
 #[tauri::command]
-pub fn place(state: State<AppState>, card_ids: Vec<i64>, pile_id: i64, method: String) -> AppResult<Placed> {
+pub fn place(app: AppHandle, state: State<AppState>, card_ids: Vec<i64>, pile_id: i64, method: String) -> AppResult<Placed> {
     let mut conn = state.conn();
     let mv = moves::place(&mut conn, &card_ids, pile_id, &method)?;
     hints::learn(&conn)?;
+    regroup(&app, &conn);
     let (_, t) = paths(&conn)?;
     Ok(Placed { mv, piles: piles::list(&conn, &t)? })
 }
@@ -232,8 +253,9 @@ pub struct Undone {
     piles: Vec<PileView>,
 }
 
-fn undone(conn: &Connection, moves: Vec<MoveView>) -> AppResult<Undone> {
+fn undone(app: &AppHandle, conn: &Connection, moves: Vec<MoveView>) -> AppResult<Undone> {
     hints::prune(conn)?;
+    regroup(app, conn);
     let ids: Vec<i64> = moves.iter().flat_map(|m| m.items.iter().filter_map(|i| i.card_id)).collect();
     let (_, t) = paths(conn)?;
     let mv = moves.iter().position(|m| m.items.iter().any(|i| i.card_id.is_some())).or((!moves.is_empty()).then_some(0));
@@ -242,17 +264,17 @@ fn undone(conn: &Connection, moves: Vec<MoveView>) -> AppResult<Undone> {
 }
 
 #[tauri::command]
-pub fn undo_last(state: State<AppState>) -> AppResult<Undone> {
+pub fn undo_last(app: AppHandle, state: State<AppState>) -> AppResult<Undone> {
     let conn = state.conn();
     let mv = moves::undo_last(&conn)?;
-    undone(&conn, mv)
+    undone(&app, &conn, mv)
 }
 
 #[tauri::command]
-pub fn undo_move(state: State<AppState>, move_id: i64) -> AppResult<Undone> {
+pub fn undo_move(app: AppHandle, state: State<AppState>, move_id: i64) -> AppResult<Undone> {
     let conn = state.conn();
     let moves = moves::undo_group(&conn, move_id)?;
-    undone(&conn, moves)
+    undone(&app, &conn, moves)
 }
 
 #[derive(Serialize)]
@@ -263,10 +285,11 @@ pub struct UndoneMany {
 }
 
 #[tauri::command]
-pub fn undo_since(state: State<AppState>, since: i64) -> AppResult<UndoneMany> {
+pub fn undo_since(app: AppHandle, state: State<AppState>, since: i64) -> AppResult<UndoneMany> {
     let conn = state.conn();
     let (undone, failed) = moves::undo_since(&conn, since)?;
     hints::prune(&conn)?;
+    regroup(&app, &conn);
     Ok(UndoneMany { undone, failed })
 }
 
@@ -378,21 +401,57 @@ pub fn dismiss_dupe(state: State<AppState>, a: String, b: String) -> AppResult<(
 }
 
 #[tauri::command]
-pub fn trash_copies(state: State<AppState>, paths: Vec<String>) -> AppResult<Placed> {
+pub fn trash_copies(app: AppHandle, state: State<AppState>, paths: Vec<String>) -> AppResult<Placed> {
     let mut conn = state.conn();
     let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
     let mv = moves::trash_copies(&mut conn, &paths)?;
+    regroup(&app, &conn);
     let (_, t) = self::paths(&conn)?;
     Ok(Placed { mv, piles: piles::list(&conn, &t)? })
 }
 
 #[tauri::command]
-pub fn replace_copy(state: State<AppState>, card_id: i64, worse_path: String) -> AppResult<Placed> {
+pub fn replace_copy(app: AppHandle, state: State<AppState>, card_id: i64, worse_path: String) -> AppResult<Placed> {
     let mut conn = state.conn();
     let mv = moves::replace_copy(&mut conn, card_id, Path::new(&worse_path))?.pop().expect("два хода");
     hints::learn(&conn)?;
+    regroup(&app, &conn);
     let (_, t) = paths(&conn)?;
     Ok(Placed { mv, piles: piles::list(&conn, &t)? })
+}
+
+#[tauri::command]
+pub fn deck_series(state: State<AppState>) -> AppResult<Vec<SeriesView>> {
+    let conn = state.conn();
+    let (d, _) = paths(&conn)?;
+    series::list(&conn, &d)
+}
+
+#[tauri::command]
+pub fn place_series(
+    app: AppHandle,
+    state: State<AppState>,
+    series_id: i64,
+    keep: Vec<i64>,
+    pile_id: i64,
+    rest: String,
+    method: String,
+) -> AppResult<Placed> {
+    let mut conn = state.conn();
+    let members = series::members(&conn, series_id)?;
+    let mv = moves::place_series(&mut conn, &members, &keep, pile_id, rest != "keep", &method)?;
+    hints::learn(&conn)?;
+    regroup(&app, &conn);
+    let (_, t) = paths(&conn)?;
+    Ok(Placed { mv, piles: piles::list(&conn, &t)? })
+}
+
+#[tauri::command]
+pub fn split_series(app: AppHandle, state: State<AppState>, series_id: i64) -> AppResult<Vec<CardView>> {
+    let conn = state.conn();
+    let ids = series::split(&conn, series_id)?;
+    regroup(&app, &conn);
+    deck::cards(&conn, &ids)
 }
 
 #[tauri::command]

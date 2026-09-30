@@ -2,6 +2,7 @@ use crate::db;
 use crate::deck::{self, CardView};
 use crate::dupes;
 use crate::hints::{self, Engine};
+use crate::photo;
 use std::collections::HashSet;
 use rusqlite::{params, Connection};
 use serde::Serialize;
@@ -174,9 +175,19 @@ fn progress(conn: &Connection, paused: bool) -> rusqlite::Result<Progress> {
     )
 }
 
-struct Developed {
-    meta: Meta,
-    saved: u32,
+enum Developed {
+    Video { meta: Meta, saved: u32 },
+    Photo(photo::PhotoMeta),
+}
+
+fn save_jpeg(file: &Path, img: &image::RgbImage) -> bool {
+    fs::File::create(file)
+        .ok()
+        .and_then(|f| {
+            let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(std::io::BufWriter::new(f), 82);
+            enc.encode_image(img).ok()
+        })
+        .is_some()
 }
 
 fn workers() -> usize {
@@ -184,6 +195,12 @@ fn workers() -> usize {
 }
 
 fn develop_files(cache: &Path, id: i64, path: &Path) -> Option<Developed> {
+    let dir = cache.join(id.to_string());
+    if deck::is_photo(path) {
+        let meta = photo::read(path).ok()?;
+        let _ = fs::create_dir_all(&dir);
+        return save_jpeg(&dir.join("0.jpg"), &meta.thumb).then_some(Developed::Photo(meta));
+    }
     #[cfg(windows)]
     let meta = mf::read(path).ok()?;
     #[cfg(not(windows))]
@@ -191,20 +208,9 @@ fn develop_files(cache: &Path, id: i64, path: &Path) -> Option<Developed> {
     if meta.frames.is_empty() {
         return None;
     }
-    let dir = cache.join(id.to_string());
     let _ = fs::create_dir_all(&dir);
-    let mut saved = 0;
-    for (i, frame) in meta.frames.iter().enumerate() {
-        let file = dir.join(format!("{i}.jpg"));
-        let ok = fs::File::create(&file).ok().and_then(|f| {
-            let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(std::io::BufWriter::new(f), 80);
-            enc.encode_image(frame).ok()
-        });
-        if ok.is_some() {
-            saved += 1;
-        }
-    }
-    Some(Developed { meta, saved })
+    let saved = meta.frames.iter().enumerate().filter(|(i, frame)| save_jpeg(&dir.join(format!("{i}.jpg")), frame)).count() as u32;
+    Some(Developed::Video { meta, saved })
 }
 
 fn develop_batch(cache: &Path, jobs: &[(i64, PathBuf)]) -> Vec<Option<Developed>> {
@@ -223,11 +229,22 @@ fn develop_batch(cache: &Path, jobs: &[(i64, PathBuf)]) -> Vec<Option<Developed>
     })
 }
 
-fn save(conn: &Connection, id: i64, result: Option<Developed>) -> rusqlite::Result<()> {
+fn save(conn: &Connection, id: i64, path: &Path, result: Option<Developed>) -> rusqlite::Result<()> {
     match result {
-        Some(Developed { meta, saved }) => conn.execute(
+        Some(Developed::Video { meta, saved }) => conn.execute(
             "UPDATE card SET duration_ms = ?2, width = ?3, height = ?4, orientation = ?5, frames = ?6, stage = 'frames', error = NULL WHERE id = ?1",
             params![id, meta.duration_ms, meta.width, meta.height, orientation(meta.width, meta.height), saved],
+        ),
+        Some(Developed::Photo(m)) => conn.execute(
+            "UPDATE card SET width = ?2, height = ?3, orientation = ?4, frames = 1, stage = 'frames', error = NULL,
+               camera = ?5, phash = ?6, sharp = ?7, look = ?9,
+               taken_at = COALESCE(?8, taken_at), taken_from = CASE WHEN ?8 IS NULL THEN taken_from ELSE 'exif' END
+             WHERE id = ?1",
+            params![id, m.width, m.height, orientation(m.width, m.height), m.camera, m.phash as i64, m.sharp, m.taken, m.look],
+        ),
+        None if deck::is_photo(path) => conn.execute(
+            "UPDATE card SET stage = 'broken', error = ?2 WHERE id = ?1",
+            params![id, "Не удалось открыть это фото — разложить его всё равно можно."],
         ),
         None => conn.execute(
             "UPDATE card SET stage = 'broken', error = ?2 WHERE id = ?1",
@@ -297,7 +314,10 @@ impl Learner {
         }
         if let Some((pile, path)) = cold {
             let vector = read_frames(&path)
-                .and_then(|frames| engine.embed(&frames[2.min(frames.len())..6.min(frames.len())]).ok())
+                .and_then(|frames| {
+                    let middle = if frames.len() > 2 { &frames[2..6.min(frames.len())] } else { &frames[..] };
+                    engine.embed(middle).ok()
+                })
                 .and_then(|vs| hints::mean(&vs));
             match vector {
                 Some(v) => {
@@ -315,6 +335,9 @@ impl Learner {
 }
 
 pub fn read_frames(path: &Path) -> Option<Vec<image::RgbImage>> {
+    if deck::is_photo(path) {
+        return photo::read(path).ok().map(|m| vec![m.thumb]);
+    }
     #[cfg(windows)]
     return mf::read(path).ok().map(|m| m.frames).filter(|f| !f.is_empty());
     #[cfg(not(windows))]
@@ -424,12 +447,18 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<Atomi
             match jobs.is_empty() {
                 false => {
                     was_busy = true;
-                    for ((id, _), result) in jobs.iter().zip(develop_batch(&cache, &jobs)) {
-                        if save(&conn, *id, result).is_ok() {
+                    for ((id, path), result) in jobs.iter().zip(develop_batch(&cache, &jobs)) {
+                        if save(&conn, *id, path, result).is_ok() {
                             if let Ok(cards) = deck::cards(&conn, &[*id]) {
                                 let card: Option<&CardView> = cards.first();
                                 let _ = app.emit("develop://card", card);
                             }
+                        }
+                    }
+                    if jobs.iter().any(|(_, p)| deck::is_photo(p)) {
+                        let deck_path = db::get_setting(&conn, "deck_path").ok().flatten().unwrap_or_default();
+                        if crate::series::regroup(&conn, &deck_path).unwrap_or(false) {
+                            let _ = app.emit("deck://series", ());
                         }
                     }
                     if last_emit.elapsed() > Duration::from_millis(250) {

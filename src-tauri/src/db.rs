@@ -120,6 +120,29 @@ pub fn init(conn: &Connection) -> rusqlite::Result<()> {
     if !has_group {
         conn.execute("ALTER TABLE move ADD COLUMN group_id INTEGER", [])?;
     }
+    let has_kind: bool = conn.prepare("SELECT 1 FROM pragma_table_info('card') WHERE name = 'kind'")?.exists([])?;
+    if !has_kind {
+        conn.execute_batch(
+            "ALTER TABLE card ADD COLUMN kind TEXT NOT NULL DEFAULT 'video' CHECK (kind IN ('video','photo'));
+             ALTER TABLE card ADD COLUMN camera TEXT;
+             ALTER TABLE card ADD COLUMN taken_from TEXT CHECK (taken_from IN ('exif','name','file'));
+             ALTER TABLE card ADD COLUMN phash INTEGER;
+             ALTER TABLE card ADD COLUMN sharp REAL;
+             ALTER TABLE card ADD COLUMN series_id INTEGER;
+             ALTER TABLE card ADD COLUMN solo INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+    conn.execute("CREATE INDEX IF NOT EXISTS card_series ON card(series_id) WHERE series_id IS NOT NULL", [])?;
+    let print_look: bool = conn.prepare("SELECT 1 FROM pragma_table_info('fingerprint') WHERE name = 'look'")?.exists([])?;
+    if !print_look {
+        conn.execute("ALTER TABLE fingerprint ADD COLUMN look BLOB", [])?;
+    }
+    let has_look: bool = conn.prepare("SELECT 1 FROM pragma_table_info('card') WHERE name = 'look'")?.exists([])?;
+    if !has_look {
+        conn.execute("ALTER TABLE card ADD COLUMN look BLOB", [])?;
+        conn.execute("UPDATE card SET stage = 'new' WHERE kind = 'photo' AND stage != 'broken'", [])?;
+        conn.execute("DELETE FROM fingerprint WHERE state = 'failed'", [])?;
+    }
     let items_by_card: bool = conn
         .prepare("SELECT 1 FROM pragma_table_info('move_item') WHERE name = 'card_id' AND \"notnull\" = 1")?
         .exists([])?;

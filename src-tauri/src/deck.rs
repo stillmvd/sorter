@@ -6,6 +6,7 @@ use std::fs;
 use std::path::Path;
 
 pub const VIDEO_EXT: [&str; 6] = ["mp4", "mov", "mkv", "webm", "avi", "m4v"];
+pub const PHOTO_EXT: [&str; 5] = ["jpg", "jpeg", "png", "webp", "gif"];
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,10 +24,14 @@ pub struct CardView {
     pub stage: String,
     pub error: Option<String>,
     pub status: String,
+    pub kind: String,
+    pub camera: Option<String>,
+    pub taken_from: Option<String>,
+    pub series_id: Option<i64>,
 }
 
 pub const CARD_COLUMNS: &str =
-    "id, deck_path, file_name, size, taken_at, duration_ms, width, height, orientation, frames, stage, error, status";
+    "id, deck_path, file_name, size, taken_at, duration_ms, width, height, orientation, frames, stage, error, status, kind, camera, taken_from, series_id";
 
 pub fn card_from_row(r: &Row) -> rusqlite::Result<CardView> {
     let deck: String = r.get(1)?;
@@ -45,19 +50,36 @@ pub fn card_from_row(r: &Row) -> rusqlite::Result<CardView> {
         stage: r.get(10)?,
         error: r.get(11)?,
         status: r.get(12)?,
+        kind: r.get(13)?,
+        camera: r.get(14)?,
+        taken_from: r.get(15)?,
+        series_id: r.get(16)?,
     })
 }
 
-pub fn is_video(path: &Path) -> bool {
+fn has_ext(path: &Path, list: &[&str]) -> bool {
     path.is_file()
         && !path.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(true)
-        && path
-            .extension()
-            .map(|e| VIDEO_EXT.contains(&e.to_string_lossy().to_lowercase().as_str()))
-            .unwrap_or(false)
+        && path.extension().map(|e| list.contains(&e.to_string_lossy().to_lowercase().as_str())).unwrap_or(false)
 }
 
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+pub fn is_video(path: &Path) -> bool {
+    has_ext(path, &VIDEO_EXT)
+}
+
+pub fn is_photo(path: &Path) -> bool {
+    has_ext(path, &PHOTO_EXT)
+}
+
+pub fn is_media(path: &Path) -> bool {
+    is_video(path) || is_photo(path)
+}
+
+pub fn photo_name(name: &str) -> bool {
+    Path::new(name).extension().map(|e| PHOTO_EXT.contains(&e.to_string_lossy().to_lowercase().as_str())).unwrap_or(false)
+}
+
+pub fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = y - era * 400;
@@ -114,7 +136,7 @@ pub fn sync(conn: &Connection, deck: &str) -> AppResult<SyncResult> {
     let mut files: Vec<(String, i64, i64)> = fs::read_dir(dir)
         .map_err(|e| io_error(&e, dir))?
         .filter_map(|e| e.ok())
-        .filter(|e| is_video(&e.path()))
+        .filter(|e| is_media(&e.path()))
         .filter_map(|e| {
             let meta = e.metadata().ok()?;
             Some((e.file_name().to_string_lossy().into_owned(), meta.len() as i64, mtime_ms(&meta)))
@@ -149,11 +171,20 @@ pub fn sync(conn: &Connection, deck: &str) -> AppResult<SyncResult> {
             Some(_) => {}
             None if !ready(&dir.join(&name)) => pending = true,
             None => {
+                let named = taken_from_name(&name);
                 conn.execute(
-                    "INSERT INTO card(deck_path, file_name, size, mtime, taken_at, position)
-                     VALUES (?1, ?2, ?3, ?4, ?5,
+                    "INSERT INTO card(deck_path, file_name, size, mtime, taken_at, taken_from, kind, position)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7,
                        (SELECT COALESCE(MAX(position), 0) + 1 FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred')))",
-                    params![deck, name, size, mtime, taken_from_name(&name).unwrap_or(mtime)],
+                    params![
+                        deck,
+                        name,
+                        size,
+                        mtime,
+                        named.unwrap_or(mtime),
+                        if named.is_some() { "name" } else { "file" },
+                        if photo_name(&name) { "photo" } else { "video" }
+                    ],
                 )?;
                 added.push(conn.last_insert_rowid());
             }
@@ -162,14 +193,15 @@ pub fn sync(conn: &Connection, deck: &str) -> AppResult<SyncResult> {
     Ok(SyncResult { added, gone, pending })
 }
 
-pub fn window(conn: &Connection, deck: &str, from: i64, count: i64) -> AppResult<Vec<CardView>> {
+pub fn window(conn: &Connection, deck: &str, from: i64, count: i64, kind: &str) -> AppResult<Vec<CardView>> {
     let sql = format!(
         "SELECT {CARD_COLUMNS} FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred')
+           AND (?4 = 'all' OR kind = ?4) AND (series_id IS NULL OR series_id = id)
          ORDER BY position LIMIT ?2 OFFSET ?3"
     );
     let cards = conn
         .prepare(&sql)?
-        .query_map(params![deck, count, from], card_from_row)?
+        .query_map(params![deck, count, from, kind], card_from_row)?
         .collect::<Result<_, _>>()?;
     Ok(cards)
 }
@@ -192,6 +224,26 @@ pub fn defer(conn: &Connection, card_id: i64) -> AppResult<()> {
         params![card_id],
     )?;
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq)]
+pub struct KindCounts {
+    pub left: i64,
+    pub placed: i64,
+}
+
+pub fn counts_by_kind(conn: &Connection, deck: &str) -> AppResult<(KindCounts, KindCounts)> {
+    let mut out = (KindCounts::default(), KindCounts::default());
+    let mut st = conn.prepare(
+        "SELECT kind, SUM(status IN ('in_deck','deferred')), SUM(status = 'placed') FROM card WHERE deck_path = ?1 GROUP BY kind",
+    )?;
+    let rows = st.query_map(params![deck], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))?;
+    for row in rows {
+        let (kind, left, placed) = row?;
+        let slot = if kind == "photo" { &mut out.1 } else { &mut out.0 };
+        *slot = KindCounts { left, placed };
+    }
+    Ok(out)
 }
 
 pub fn counts(conn: &Connection, deck: &str) -> AppResult<(i64, i64)> {
@@ -222,19 +274,32 @@ mod tests {
         fs::write(tmp.path().join("b.mp4"), b"b").unwrap();
         fs::write(tmp.path().join("a.MP4"), b"a").unwrap();
         fs::write(tmp.path().join("notes.txt"), b"x").unwrap();
+        fs::write(tmp.path().join("c.JPG"), b"c").unwrap();
         fs::create_dir(tmp.path().join("sub")).unwrap();
         fs::write(tmp.path().join("sub/c.mp4"), b"c").unwrap();
         let conn = Connection::open_in_memory().unwrap();
         db::init(&conn).unwrap();
-        assert_eq!(sync(&conn, &deck).unwrap().added.len(), 2);
-        let w = window(&conn, &deck, 0, 10).unwrap();
+        assert_eq!(sync(&conn, &deck).unwrap().added.len(), 3);
+        let w = window(&conn, &deck, 0, 10, "all").unwrap();
         assert_eq!(w[0].file_name, "a.MP4");
+        assert_eq!((w[2].file_name.as_str(), w[2].kind.as_str()), ("c.JPG", "photo"));
+        assert_eq!(window(&conn, &deck, 0, 10, "photo").unwrap().len(), 1);
+        assert_eq!(window(&conn, &deck, 0, 10, "video").unwrap().len(), 2);
         defer(&conn, w[0].id).unwrap();
-        assert_eq!(window(&conn, &deck, 0, 10).unwrap()[0].file_name, "b.mp4");
+        assert_eq!(window(&conn, &deck, 0, 10, "all").unwrap()[0].file_name, "b.mp4");
         fs::remove_file(tmp.path().join("b.mp4")).unwrap();
         let r = sync(&conn, &deck).unwrap();
         assert_eq!(r.gone.len(), 1);
         assert!(r.added.is_empty());
-        assert_eq!(counts(&conn, &deck).unwrap(), (1, 0));
+        assert_eq!(counts(&conn, &deck).unwrap(), (2, 0));
+        let (v, p) = counts_by_kind(&conn, &deck).unwrap();
+        assert_eq!((v.left, p.left), (1, 1));
+        conn.execute(
+            "UPDATE card SET series_id = (SELECT id FROM card WHERE file_name = 'a.MP4') WHERE file_name IN ('a.MP4', 'c.JPG')",
+            [],
+        )
+        .unwrap();
+        let names: Vec<String> = window(&conn, &deck, 0, 10, "all").unwrap().into_iter().map(|c| c.file_name).collect();
+        assert_eq!(names, vec!["a.MP4".to_string()]);
     }
 }

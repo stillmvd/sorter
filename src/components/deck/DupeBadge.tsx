@@ -1,5 +1,5 @@
 import { Copy } from "lucide-react";
-import type { DupeView, Pile } from "../../lib/ipc";
+import { isPhotoPath, type DupeView, type Pile } from "../../lib/ipc";
 import { Button } from "../ui/Button";
 import { Kbd } from "../ui/Kbd";
 
@@ -13,6 +13,7 @@ const span = (from: number, to: number) => `${clock(from)}\u2060–\u2060${clock
 function kindText(dupe: DupeView, mine: number | null) {
   if (dupe.kind === "exact") return "точная копия";
   if (dupe.kind === "crop") return "кадрирована";
+  if (dupe.kind === "same" && isPhotoPath(dupe.path)) return `та же фотография, ${dupe.better ? "больше" : "меньше"} разрешение`;
   if (dupe.kind === "same") return `та же запись, ${dupe.better ? "лучше" : "хуже"} качество`;
   const theirs = dupe.durationMs;
   const offset = dupe.offsetMs ?? 0;
@@ -105,7 +106,7 @@ export function DupeBadge({
           В конец
         </Button>
         <Button variant="ghost" onClick={onDismiss} hotkey="N" className="text-dim">
-          Это разные видео
+          {isPhotoPath(dupe.path) ? "Это разные фото" : "Это разные видео"}
         </Button>
       </div>
     </div>

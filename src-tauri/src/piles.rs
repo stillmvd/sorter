@@ -1,4 +1,4 @@
-use crate::deck::is_video;
+use crate::deck::{is_photo, is_video, photo_name};
 use crate::error::{io_error, AppError, AppResult};
 use crate::moves::{safe_rename, validate_pile_name};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -20,6 +20,8 @@ pub struct PileView {
     pub key: Option<String>,
     pub is_trash: bool,
     pub count: i64,
+    pub videos: i64,
+    pub photos: i64,
     pub examples: i64,
 }
 
@@ -68,10 +70,14 @@ pub fn sync(conn: &Connection, table: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn count_videos(dir: &Path) -> i64 {
+fn count_media(dir: &Path) -> (i64, i64) {
     fs::read_dir(dir)
-        .map(|it| it.filter_map(|e| e.ok()).filter(|e| is_video(&e.path())).count() as i64)
-        .unwrap_or(0)
+        .map(|it| {
+            it.filter_map(|e| e.ok()).map(|e| e.path()).fold((0, 0), |(v, p), path| {
+                (v + is_video(&path) as i64, p + is_photo(&path) as i64)
+            })
+        })
+        .unwrap_or((0, 0))
 }
 
 pub fn list(conn: &Connection, table: &str) -> AppResult<Vec<PileView>> {
@@ -85,17 +91,17 @@ pub fn list(conn: &Connection, table: &str) -> AppResult<Vec<PileView>> {
         .collect::<Result<_, _>>()?;
     let mut out = Vec::with_capacity(rows.len());
     for (id, name, key, is_trash, examples) in rows {
-        let count = if is_trash {
-            conn.query_row(
-                "SELECT COUNT(*) FROM move_item i JOIN move m ON m.id = i.move_id WHERE m.pile_id = ?1 AND m.state = 'done'",
-                params![id],
-                |r| r.get(0),
-            )?
+        let (videos, photos) = if is_trash {
+            conn.prepare("SELECT i.from_path FROM move_item i JOIN move m ON m.id = i.move_id WHERE m.pile_id = ?1 AND m.state = 'done'")?
+                .query_map(params![id], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?
+                .iter()
+                .fold((0, 0), |(v, p), path| if photo_name(path) { (v, p + 1) } else { (v + 1, p) })
         } else {
-            count_videos(&Path::new(table).join(&name))
+            count_media(&Path::new(table).join(&name))
         };
         let name = if is_trash { "Корзина".to_string() } else { name };
-        out.push(PileView { id, name, key, is_trash, count, examples });
+        out.push(PileView { id, name, key, is_trash, count: videos + photos, videos, photos, examples });
     }
     Ok(out)
 }
@@ -263,7 +269,11 @@ mod tests {
     fn removes_only_empty() {
         let (t, table, conn) = setup(&["Пусто", "Полно"]);
         fs::write(t.path().join("Полно").join("a.mp4"), b"a").unwrap();
+        fs::write(t.path().join("Полно").join("b.jpg"), b"b").unwrap();
+        fs::write(t.path().join("Полно").join("c.txt"), b"c").unwrap();
         let piles = list(&conn, &table).unwrap();
+        let full = piles.iter().find(|p| p.name == "Полно").unwrap();
+        assert_eq!((full.count, full.videos, full.photos), (2, 1, 1));
         let id = |n: &str| piles.iter().find(|p| p.name == n).unwrap().id;
         assert_eq!(remove(&conn, id("Полно")).unwrap_err().code, "PILE_NOT_EMPTY");
         remove(&conn, id("Пусто")).unwrap();

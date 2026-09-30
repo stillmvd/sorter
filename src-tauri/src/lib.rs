@@ -7,6 +7,8 @@ mod error;
 mod hints;
 mod media;
 mod moves;
+mod photo;
+mod series;
 mod piles;
 mod playable;
 mod taskbar_icon;
@@ -17,6 +19,22 @@ use commands::AppState;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
+
+fn fit_to_screen(window: &tauri::WebviewWindow) {
+    if window.is_maximized().unwrap_or(false) {
+        return;
+    }
+    let (Ok(Some(monitor)), Ok(size)) = (window.current_monitor(), window.outer_size()) else { return };
+    let area = monitor.work_area();
+    let w = size.width.min(area.size.width * 96 / 100);
+    let h = size.height.min(area.size.height * 96 / 100);
+    if (w, h) != (size.width, size.height) {
+        let _ = window.set_size(tauri::PhysicalSize::new(w, h));
+    }
+    let x = area.position.x + (area.size.width as i32 - w as i32) / 2;
+    let y = area.position.y + (area.size.height as i32 - h as i32) / 2;
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+}
 
 pub fn run() {
     tauri::Builder::default()
@@ -55,6 +73,7 @@ pub fn run() {
             updates::init(app.handle());
             if let Some(window) = app.get_webview_window("main") {
                 taskbar_icon::apply(&window);
+                fit_to_screen(&window);
                 let target = window.clone();
                 let handle = app.handle().clone();
                 window.on_window_event(move |event| match event {
@@ -92,6 +111,9 @@ pub fn run() {
             commands::dupes_for,
             commands::dismiss_dupe,
             commands::dupe_groups,
+            commands::deck_series,
+            commands::place_series,
+            commands::split_series,
             commands::playable,
             commands::trash_copies,
             commands::replace_copy,

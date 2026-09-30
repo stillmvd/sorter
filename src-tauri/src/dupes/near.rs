@@ -29,10 +29,11 @@ pub struct Entry {
     pub frames: Vec<u64>,
     pub audio: Vec<u32>,
     pub mean: Vec<f32>,
+    pub look: Vec<u8>,
 }
 
 pub fn entries(conn: &Connection) -> rusqlite::Result<Vec<Entry>> {
-    conn.prepare("SELECT path, duration_ms, frames, audio, mean FROM fingerprint WHERE state = 'ok'")?
+    conn.prepare("SELECT path, duration_ms, frames, audio, mean, look FROM fingerprint WHERE state = 'ok'")?
         .query_map([], |r| {
             Ok(Entry {
                 path: r.get(0)?,
@@ -40,6 +41,7 @@ pub fn entries(conn: &Connection) -> rusqlite::Result<Vec<Entry>> {
                 frames: u64s(&r.get::<_, Option<Vec<u8>>>(2)?.unwrap_or_default()),
                 audio: u32s(&r.get::<_, Option<Vec<u8>>>(3)?.unwrap_or_default()),
                 mean: hints::from_blob(&r.get::<_, Option<Vec<u8>>>(4)?.unwrap_or_default()),
+                look: r.get::<_, Option<Vec<u8>>>(5)?.unwrap_or_default(),
             })
         })?
         .collect()
@@ -60,7 +62,40 @@ pub struct Pair {
     pub semantic: f32,
 }
 
+const PHOTO_HAM: u32 = 8;
+const PHOTO_CANDIDATE: f32 = 0.75;
+const PHOTO_FIT: f32 = 0.98;
+const PHOTO_PART: f32 = 0.93;
+
+pub fn compare_photos(a: &Entry, b: &Entry) -> Option<Pair> {
+    let ham = match (a.frames.first(), b.frames.first()) {
+        (Some(x), Some(y)) => (x ^ y).count_ones(),
+        _ => 64,
+    };
+    if ham <= PHOTO_HAM {
+        return Some(Pair { kind: "same", confidence: 100 - 5 * ham as i64, offset_ms: 0, visual: 1.0 - ham as f32 / 64.0, audio: 0.0, semantic: 0.0 });
+    }
+    let semantic = if a.mean.is_empty() || b.mean.is_empty() { 0.0 } else { hints::dot(&a.mean, &b.mean) };
+    if semantic < PHOTO_CANDIDATE {
+        return None;
+    }
+    let (ab, ba) = (print::contains(&a.look, &b.look), print::contains(&b.look, &a.look));
+    let (fit, part) = if ab.0 >= ba.0 { ab } else { ba };
+    (fit >= PHOTO_FIT && part <= PHOTO_PART).then(|| Pair {
+        kind: "crop",
+        confidence: ((80.0 + 1000.0 * (fit - PHOTO_FIT)).round() as i64).min(99),
+        offset_ms: 0,
+        visual: fit,
+        audio: 0.0,
+        semantic,
+    })
+}
+
 pub fn compare(conn: &Connection, a: &Entry, b: &Entry, audio_set: &HashSet<u32>) -> rusqlite::Result<Option<Pair>> {
+    let (pa, pb) = (crate::deck::photo_name(&a.path), crate::deck::photo_name(&b.path));
+    if pa || pb {
+        return Ok(if pa && pb { compare_photos(a, b) } else { None });
+    }
     let (visual, offset) = matcher::align(&a.frames, &b.frames, FRAME_HAM);
     let audio_hits = b.audio.iter().filter(|h| audio_set.contains(h)).take(AUDIO_HITS).count();
     let audio = if visual >= 0.6 || audio_hits >= AUDIO_HITS { matcher::align(&a.audio, &b.audio, AUDIO_HAM).0 } else { 0.0 };
@@ -110,14 +145,14 @@ pub fn save_print(conn: &Connection, f: &FileInfo, p: Option<&Print>, vectors: &
     let mean = hints::mean(vectors).map(|m| hints::to_blob(&m));
     let bbox = format!("{},{},{},{}", p.bbox[0], p.bbox[1], p.bbox[2], p.bbox[3]);
     conn.execute(
-        "INSERT INTO fingerprint(path, size, mtime, duration_ms, width, height, bitrate, box, frames, audio, semantic, mean, state)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'ok')
+        "INSERT INTO fingerprint(path, size, mtime, duration_ms, width, height, bitrate, box, frames, audio, semantic, mean, look, state)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'ok')
          ON CONFLICT(path) DO UPDATE SET
            sha256 = CASE WHEN size = excluded.size AND mtime = excluded.mtime THEN sha256 END,
            size = excluded.size, mtime = excluded.mtime, duration_ms = excluded.duration_ms, width = excluded.width,
            height = excluded.height, bitrate = excluded.bitrate, box = excluded.box, frames = excluded.frames,
-           audio = excluded.audio, semantic = excluded.semantic, mean = excluded.mean, state = 'ok'",
-        params![f.path, f.size, f.mtime, p.duration_ms, p.width, p.height, p.bitrate, bbox, frames, audio, semantic, mean],
+           audio = excluded.audio, semantic = excluded.semantic, mean = excluded.mean, look = excluded.look, state = 'ok'",
+        params![f.path, f.size, f.mtime, p.duration_ms, p.width, p.height, p.bitrate, bbox, frames, audio, semantic, mean, p.look],
     )?;
     Ok(())
 }
@@ -174,6 +209,7 @@ impl Printer {
             frames: p.frames,
             audio: p.audio,
             mean: hints::mean(&vectors).unwrap_or_default(),
+            look: p.look,
         };
         let audio_set: HashSet<u32> = me.audio.iter().copied().collect();
         let mut changed = false;
@@ -199,7 +235,7 @@ mod tests {
     fn entry(path: &Path) -> Option<(Entry, Print)> {
         let p = print::print(path)?;
         Some((
-            Entry { path: path.to_string_lossy().into_owned(), duration_ms: p.duration_ms, frames: p.frames.clone(), audio: p.audio.clone(), mean: Vec::new() },
+            Entry { path: path.to_string_lossy().into_owned(), duration_ms: p.duration_ms, frames: p.frames.clone(), audio: p.audio.clone(), mean: Vec::new(), look: Vec::new() },
             p,
         ))
     }
@@ -245,6 +281,56 @@ mod tests {
             }
         }
         assert!(weak.is_empty(), "не нашли ≥ 80 %: {weak:?}");
+    }
+}
+
+#[cfg(all(test, windows))]
+mod photos {
+    use super::*;
+
+    fn entry(engine: &mut Option<Engine>, path: &Path) -> Option<Entry> {
+        let p = print::print_photo(path)?;
+        let v = embed(engine.as_mut(), &p);
+        Some(Entry { path: path.to_string_lossy().into_owned(), duration_ms: 0, frames: p.frames, audio: Vec::new(), mean: hints::mean(&v).unwrap_or_default(), look: p.look })
+    }
+
+    #[test]
+    #[ignore]
+    fn photo_variants_and_false_pairs() {
+        let dir = Path::new(r"G:\sorter-test\photos");
+        if !dir.exists() {
+            return;
+        }
+        let runtime = std::env::var("APPDATA").map(|a| Path::new(&a).join("com.stillmvd.sorter").join("runtime")).unwrap();
+        let mut engine = Engine::load(&runtime).ok();
+        let orig = entry(&mut engine, &dir.join("dupe_orig.jpg")).unwrap();
+        let mut weak = Vec::new();
+        for name in ["dupe_half.jpg", "dupe_q60.jpg", "dupe_crop80.jpg"] {
+            let e = entry(&mut engine, &dir.join(name)).unwrap();
+            let pair = compare_photos(&e, &orig);
+            println!("{name}: {:?} смысл {:.3} ham {}", pair.as_ref().map(|p| (p.kind, p.confidence)), hints::dot(&e.mean, &orig.mean), (e.frames[0] ^ orig.frames[0]).count_ones()); println!("  вписан {:?} look {} {}", print::contains(&orig.look, &e.look), orig.look.len(), e.look.len());
+            if pair.map(|p| p.confidence).unwrap_or(0) < 80 {
+                weak.push(name);
+            }
+        }
+        let mut all = Vec::new();
+        for e in std::fs::read_dir(r"G:\vk photos").unwrap().filter_map(|e| e.ok()) {
+            if let Some(x) = entry(&mut engine, &e.path()) {
+                all.push(x);
+            }
+        }
+        let mut shown = Vec::new();
+        for (i, a) in all.iter().enumerate() {
+            for b in &all[i + 1..] {
+                if let Some(p) = compare_photos(a, b) {
+                    if p.confidence >= 80 {
+                        shown.push(format!("{} | {} {} {} {:.3}", a.path, b.path, p.kind, p.confidence, p.semantic));
+                    }
+                }
+            }
+        }
+        shown.iter().for_each(|s| println!("ПАРА {s}"));
+        assert!(weak.is_empty(), "не нашли ≥ 80: {weak:?}");
     }
 }
 

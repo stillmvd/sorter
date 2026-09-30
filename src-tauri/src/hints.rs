@@ -155,9 +155,13 @@ pub fn enabled(conn: &Connection) -> bool {
 }
 
 pub fn card_frames(cache: &Path, id: i64) -> Vec<RgbImage> {
-    (2..6)
-        .filter_map(|i| image::open(cache.join(id.to_string()).join(format!("{i}.jpg"))).ok().map(|img| img.to_rgb8()))
-        .collect()
+    let open = |i: i32| image::open(cache.join(id.to_string()).join(format!("{i}.jpg"))).ok().map(|img| img.to_rgb8());
+    let middle: Vec<RgbImage> = (2..6).filter_map(open).collect();
+    if middle.is_empty() {
+        open(0).into_iter().collect()
+    } else {
+        middle
+    }
 }
 
 pub fn to_embed(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<i64>> {
@@ -224,7 +228,7 @@ pub fn cold_files(conn: &Connection) -> rusqlite::Result<Vec<(i64, PathBuf)>> {
     for (id, name) in piles {
         let Ok(dir) = fs::read_dir(Path::new(&table).join(&name)) else { continue };
         for path in dir.filter_map(|e| e.ok().map(|e| e.path())) {
-            if deck::is_video(&path) && !known.contains(&path.to_string_lossy().to_lowercase()) {
+            if deck::is_media(&path) && !known.contains(&path.to_string_lossy().to_lowercase()) {
                 out.push((id, path));
             }
         }

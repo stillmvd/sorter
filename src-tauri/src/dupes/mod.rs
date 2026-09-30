@@ -69,7 +69,7 @@ pub fn files(conn: &Connection) -> rusqlite::Result<Vec<FileInfo>> {
         .collect::<Result<_, _>>()?;
     for name in piles {
         let Ok(dir) = fs::read_dir(Path::new(&table).join(&name)) else { continue };
-        out.extend(dir.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| deck::is_video(p)).filter_map(|p| info(&p)));
+        out.extend(dir.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| deck::is_media(p)).filter_map(|p| info(&p)));
     }
     Ok(out)
 }
@@ -248,6 +248,25 @@ fn better(a: &Copy, b: &Copy) -> bool {
         .is_gt()
 }
 
+fn series_of(conn: &Connection, deck: &str, path: &str) -> Option<i64> {
+    let p = Path::new(path);
+    if p.parent().map(|d| d.to_string_lossy().to_lowercase()) != Some(deck.to_lowercase()) {
+        return None;
+    }
+    let name = p.file_name()?.to_string_lossy().into_owned();
+    conn.query_row(
+        "SELECT series_id FROM card WHERE deck_path = ?1 AND file_name = ?2 AND status IN ('in_deck','deferred')",
+        params![deck, name],
+        |r| r.get::<_, Option<i64>>(0),
+    )
+    .ok()
+    .flatten()
+}
+
+fn same_series(conn: &Connection, deck: &str, a: &str, b: &str) -> bool {
+    matches!((series_of(conn, deck, a), series_of(conn, deck, b)), (Some(x), Some(y)) if x == y)
+}
+
 pub fn dupes_for(conn: &Connection, card_id: i64) -> AppResult<Vec<DupeView>> {
     let deck = db::get_setting(conn, "deck_path")?.unwrap_or_default();
     let table = db::get_setting(conn, "table_path")?.unwrap_or_default();
@@ -269,7 +288,7 @@ pub fn dupes_for(conn: &Connection, card_id: i64) -> AppResult<Vec<DupeView>> {
         let offset = offset.map(|o| if mine { o } else { -o });
         let other = if mine { b } else { a };
         let p = PathBuf::from(&other);
-        if !p.is_file() {
+        if !p.is_file() || same_series(conn, &deck, &card.path, &other) {
             continue;
         }
         let (copy, width, height, duration_ms) = copy_of(conn, &other, &deck)?;
@@ -411,7 +430,10 @@ pub fn groups(conn: &Connection) -> AppResult<Groups> {
         .prepare("SELECT a, b, kind, confidence, offset_ms FROM dupe WHERE confidence >= ?1")?
         .query_map(params![GROUP_MIN], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
         .collect::<Result<_, _>>()?;
-    let rows: Vec<_> = rows.into_iter().filter(|(a, b, ..)| Path::new(a).is_file() && Path::new(b).is_file()).collect();
+    let rows: Vec<_> = rows
+        .into_iter()
+        .filter(|(a, b, ..)| Path::new(a).is_file() && Path::new(b).is_file() && !same_series(conn, &deck, a, b))
+        .collect();
     let mut index: HashMap<String, usize> = HashMap::new();
     let mut parent: Vec<usize> = Vec::new();
     fn root(parent: &mut [usize], mut i: usize) -> usize {

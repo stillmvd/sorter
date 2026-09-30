@@ -17,7 +17,15 @@ export type Card = {
   stage: "new" | "meta" | "frames" | "embedded" | "broken";
   error: string | null;
   status: "in_deck" | "deferred" | "placed" | "gone";
+  kind: "video" | "photo";
+  camera: string | null;
+  takenFrom: "exif" | "name" | "file" | null;
+  seriesId: number | null;
 };
+
+export type Kind = "all" | "video" | "photo";
+
+export type SeriesView = { id: number; best: number; cards: Card[] };
 
 export type Pile = {
   id: number;
@@ -25,6 +33,8 @@ export type Pile = {
   key: string | null;
   isTrash: boolean;
   count: number;
+  videos: number;
+  photos: number;
   examples: number;
 };
 
@@ -99,7 +109,11 @@ export type DupeView = {
   better: boolean;
 };
 
-export type Settings = Partial<Record<"deck_path" | "table_path" | "hints_enabled" | "theme" | "muted" | "mode" | "volume" | "updates", string>>;
+export type Settings = Partial<
+  Record<"deck_path" | "table_path" | "hints_enabled" | "theme" | "muted" | "mode" | "volume" | "updates" | "kind_filter" | "series_rest", string>
+>;
+
+export type KindCounts = { left: number; placed: number };
 
 export type Developing = { done: number; total: number; paused: boolean; printed: number };
 
@@ -107,7 +121,7 @@ export type AppState = {
   cacheDir: string;
   developing: Developing;
   settings: Settings;
-  deck: { total: number; left: number; placed: number };
+  deck: { total: number; left: number; placed: number; byKind: { video: KindCounts; photo: KindCounts } };
   piles: Pile[];
 };
 
@@ -120,6 +134,8 @@ export function errorText(e: unknown): string {
 
 export const media = (path: string) => convertFileSrc(path, "media");
 
+export const isPhotoPath = (path: string) => /\.(jpe?g|png|webp|gif)$/i.test(path);
+
 export const frameSrc = (cacheDir: string, card: Card, i: number) =>
   `${media([cacheDir, card.id, `${i}.jpg`].join("\\"))}?s=${card.stage}${card.frames}`;
 
@@ -128,6 +144,7 @@ export const onDeckChanged = (fn: (d: { added: Card[]; gone: number[] }) => void
   listen<{ added: Card[]; gone: number[] }>("deck://changed", (e) => fn(e.payload));
 export const onPilesChanged = (fn: (p: Pile[]) => void) => listen<Pile[]>("piles://changed", (e) => fn(e.payload));
 export const onHintsChanged = (fn: () => void) => listen("hints://changed", () => fn());
+export const onSeries = (fn: () => void) => listen("deck://series", () => fn());
 export const onDupesChanged = (fn: () => void) => listen("dupes://changed", () => fn());
 export type UpdatePhase = "idle" | "checking" | "latest" | "downloading" | "ready" | "failed" | "off";
 
@@ -155,7 +172,11 @@ export const ipc = {
   chooseDeck: (path: string) => invoke<{ count: number; bytes: number }>("choose_deck", { path }),
   chooseTable: (path: string) => invoke<Pile[]>("choose_table", { path }),
   setSetting: (key: string, value: string) => invoke<void>("set_setting_cmd", { key, value }),
-  deckWindow: (from: number, count: number) => invoke<Card[]>("deck_window", { from, count }),
+  deckWindow: (from: number, count: number, kind: Kind = "all") => invoke<Card[]>("deck_window", { from, count, kind }),
+  deckSeries: () => invoke<SeriesView[]>("deck_series"),
+  placeSeries: (seriesId: number, keep: number[], pileId: number, rest: "trash" | "keep", method: Method) =>
+    invoke<{ move: Move; piles: Pile[] }>("place_series", { seriesId, keep, pileId, rest, method }),
+  splitSeries: (seriesId: number) => invoke<Card[]>("split_series", { seriesId }),
   place: (cardIds: number[], pileId: number, method: Method) =>
     invoke<{ move: Move; piles: Pile[] }>("place", { cardIds, pileId, method }),
   defer: (cardId: number) => invoke<void>("defer", { cardId }),

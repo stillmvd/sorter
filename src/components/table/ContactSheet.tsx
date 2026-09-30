@@ -51,7 +51,9 @@ export function ContactSheet({
   onSelect,
   onPress,
   onVisible,
+  series,
 }: {
+  series?: Map<number, number>;
   cards: Card[];
   selected: Set<number>;
   cacheDir: string;
@@ -139,6 +141,7 @@ export function ContactSheet({
               selected={selected.has(p.card.id)}
               onPick={pick}
               onPress={onPress}
+              series={series?.get(p.card.id)}
             />
           ))}
         </div>

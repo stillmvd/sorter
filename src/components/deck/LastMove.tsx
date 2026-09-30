@@ -5,12 +5,15 @@ import { Button } from "../ui/Button";
 
 function Thumb({ move }: { move: Move }) {
   const item = move.items[0];
-  const src = item.toPath ? `${media(item.toPath)}#t=0.5` : null;
+  const photo = /\.(jpe?g|png|webp|gif)$/i.test(item.fileName);
+  const src = item.toPath ? (photo ? media(item.toPath) : `${media(item.toPath)}#t=0.5`) : null;
   return (
     <div className="relative h-[84px] w-14 shrink-0">
       {move.items.length > 1 && <div className="absolute inset-0 translate-x-1.5 rotate-3 rounded-[10px] bg-strong" />}
       <div className="absolute inset-0 -rotate-6 overflow-hidden rounded-[10px] border border-line bg-film">
-        {src ? (
+        {src && photo ? (
+          <img key={src} src={src} alt="" className="h-full w-full object-cover" />
+        ) : src ? (
           <video key={src} src={src} muted preload="metadata" className="h-full w-full object-cover" />
         ) : (
           <div className="grid h-full place-items-center text-[#a2a2a9]">

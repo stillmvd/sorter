@@ -15,7 +15,9 @@ export const Tile = memo(function Tile({
   selected,
   onPick,
   onPress,
+  series = 0,
 }: {
+  series?: number;
   card: Card;
   no: number;
   w: number;
@@ -39,8 +41,10 @@ export const Tile = memo(function Tile({
     if (Math.abs(v.currentTime - at) > 0.04) v.currentTime = at;
   };
 
+  const photo = card.kind === "photo";
+
   const move = (e: MouseEvent<HTMLButtonElement>) => {
-    if ("dragging" in document.body.dataset) return;
+    if (photo || "dragging" in document.body.dataset) return;
     const r = e.currentTarget.getBoundingClientRect();
     const p = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
     want.current = p;
@@ -50,9 +54,9 @@ export const Tile = memo(function Tile({
 
   const scrubbing = pct !== null;
   const frame = scrubbing ? Math.min(card.frames - 1, Math.floor(pct * FRAMES)) : Math.min(card.frames - 1, FRAMES / 2 - 1);
-  const d = card.durationMs ?? 0;
+  const d = photo ? 0 : (card.durationMs ?? 0);
 
-  return (
+  const tile = (
     <button
       type="button"
       data-tile-id={card.id}
@@ -69,7 +73,7 @@ export const Tile = memo(function Tile({
       className={`relative shrink-0 select-none overflow-hidden rounded-xl bg-[#26262a] ${
         selected ? "outline outline-[1.5px] outline-offset-[3px] outline-[#ececef]" : ""
       }`}
-      style={{ width: w, height: h }}
+      style={series ? { width: "100%", height: "100%" } : { width: w, height: h }}
     >
       {card.frames > 0 ? (
         <img src={frameSrc(cacheDir, card, frame)} alt="" draggable={false} className="absolute inset-0 h-full w-full object-cover" />
@@ -103,6 +107,15 @@ export const Tile = memo(function Tile({
           {scrubbing ? `${tc(pct * d)} / ${tc(d)}` : tc(d)}
         </span>
       )}
+      {series > 0 && (
+        <span className="absolute bottom-2 left-2 flex h-[22px] items-center gap-1.5 rounded-md bg-[rgb(12_12_14/72%)] px-2 text-[11px] font-bold text-[#ececef]">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <rect x="7" y="7" width="13" height="13" rx="2" />
+            <path d="M4 16V6a2 2 0 012-2h10" />
+          </svg>
+          Серия · {series}
+        </span>
+      )}
       {selected && (
         <span className="absolute right-1.5 top-1.5 grid h-8 w-8 place-items-center rounded-full bg-[rgb(12_12_14/72%)]">
           <svg width="20" height="22" viewBox="0 0 26 30" fill="none" stroke="#ececef" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
@@ -123,5 +136,13 @@ export const Tile = memo(function Tile({
         </>
       )}
     </button>
+  );
+  if (!series) return tile;
+  return (
+    <div className="relative shrink-0" style={{ width: w, height: h }}>
+      <span className="absolute inset-0 translate-x-2 -translate-y-2 rounded-xl bg-[#3c3c3f]" />
+      <span className="absolute inset-0 translate-x-1 -translate-y-1 rounded-xl bg-[#2e2e33]" />
+      <div className="absolute inset-0">{tile}</div>
+    </div>
   );
 });

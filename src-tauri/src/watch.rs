@@ -58,6 +58,9 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, wake: Arc<AtomicBool>) {
                         let added = deck::cards(&conn, &r.added).unwrap_or_default();
                         let _ = app.emit("deck://changed", DeckChanged { added, gone: r.gone });
                         wake.store(true, Ordering::Relaxed);
+                        if crate::series::regroup(&conn, d).unwrap_or(false) {
+                            let _ = app.emit("deck://series", ());
+                        }
                     }
                 }
             }

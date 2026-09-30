@@ -460,6 +460,44 @@ pub fn replace_copy_with(conn: &mut Connection, card_id: i64, worse: &Path, rena
     }
 }
 
+pub fn place_series(conn: &mut Connection, members: &[i64], keep: &[i64], pile_id: i64, trash_rest: bool, method: &str) -> AppResult<MoveView> {
+    place_series_with(conn, members, keep, pile_id, trash_rest, method, safe_rename)
+}
+
+pub fn place_series_with(
+    conn: &mut Connection,
+    members: &[i64],
+    keep: &[i64],
+    pile_id: i64,
+    trash_rest: bool,
+    method: &str,
+    rename: RenameFn,
+) -> AppResult<MoveView> {
+    if members.is_empty() {
+        return Err(AppError::new("NO_CARD", "Этой серии уже нет в колоде — колода обновится сама."));
+    }
+    let chosen: Vec<i64> = if keep.is_empty() { members.to_vec() } else { members.iter().copied().filter(|id| keep.contains(id)).collect() };
+    let rest: Vec<i64> = members.iter().copied().filter(|id| !chosen.contains(id)).collect();
+    let first = move_with(conn, &chosen, &[], pile_id, method, None, rename)?;
+    if !trash_rest {
+        for id in &rest {
+            conn.execute("UPDATE card SET solo = 1, series_id = NULL WHERE id = ?1", params![id])?;
+        }
+    }
+    if !trash_rest || rest.is_empty() {
+        return Ok(first);
+    }
+    let trash = trash_pile(conn)?;
+    conn.execute("UPDATE move SET group_id = ?1 WHERE id = ?1", params![first.id])?;
+    match move_with(conn, &rest, &[], trash, method, Some(first.id), rename) {
+        Ok(_) => load_move(conn, first.id),
+        Err(e) => {
+            let _ = undo_with(conn, first.id, rename);
+            Err(e)
+        }
+    }
+}
+
 fn same_root(a: &Path, b: &Path) -> bool {
     let root = |p: &Path| p.components().next().map(|c| c.as_os_str().to_string_lossy().to_lowercase());
     root(a) == root(b)
@@ -718,6 +756,30 @@ mod tests {
         assert!(e.deck.join("best.mp4").exists());
         assert_eq!(status(&e, c), "in_deck");
         assert!(worse.exists());
+    }
+
+    #[test]
+    fn series_places_marked_trashes_rest_and_undoes_as_one() {
+        let mut e = env();
+        with_trash(&e);
+        let ids: Vec<i64> = (1..=5).map(|i| card(&e, &format!("s{i}.jpg"), b"x")).collect();
+        let m = place_series_with(&mut e.conn, &ids, &[ids[1], ids[3]], e.pile, true, "key", cross_free).unwrap();
+        assert_eq!(m.items.len(), 2);
+        assert!(e.table.join("Мемы/s2.jpg").exists() && e.table.join("Мемы/s4.jpg").exists());
+        assert!(ids.iter().all(|id| status(&e, *id) == "placed"));
+        let undone = undo_last(&e.conn).unwrap();
+        assert_eq!(undone.len(), 2);
+        assert!(ids.iter().all(|id| status(&e, *id) == "in_deck"));
+        assert!((1..=5).all(|i| e.deck.join(format!("s{i}.jpg")).exists()));
+
+        let m = place_series_with(&mut e.conn, &ids, &[ids[0]], e.pile, false, "key", cross_free).unwrap();
+        assert_eq!(m.items.len(), 1);
+        assert_eq!((status(&e, ids[0]).as_str(), status(&e, ids[1]).as_str()), ("placed", "in_deck"));
+        let solo: i64 = e.conn.query_row("SELECT solo FROM card WHERE id = ?1", params![ids[1]], |r| r.get(0)).unwrap();
+        assert_eq!(solo, 1);
+        undo_last(&e.conn).unwrap();
+        let all = place_series_with(&mut e.conn, &ids, &[], e.pile, true, "key", cross_free).unwrap();
+        assert_eq!(all.items.len(), 5);
     }
 
     #[test]

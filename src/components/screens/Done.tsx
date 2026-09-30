@@ -1,6 +1,7 @@
 import { openPath } from "@tauri-apps/plugin-opener";
 import { useEffect, useState } from "react";
 import { ipc, type Pile } from "../../lib/ipc";
+import { filesWord } from "../../lib/plural";
 import { Button } from "../ui/Button";
 import { Mark } from "../ui/Mark";
 import { Heading } from "../ui/PageHeader";
@@ -12,7 +13,9 @@ export function Done({
   tablePath,
   hintsOn,
   onJournal,
+  rest,
 }: {
+  rest?: { gone: string; left: string; show: string; onShow: () => void };
   placed: number;
   piles: Pile[];
   deckPath: string;
@@ -30,7 +33,7 @@ export function Done({
   const top = Math.max(1, ...list.map((p) => p.count));
   const guessed = hintsOn && stats?.cards ? `${Math.round((stats.hinted / stats.cards) * 100)}%` : "—";
   const tiles = [
-    { k: "Разложено видео", v: String(placed) },
+    { k: "Разложено", v: String(placed) },
     { k: "Стопок", v: String(list.length) },
     { k: "Угадано подсказкой", v: guessed },
   ];
@@ -40,18 +43,33 @@ export function Done({
       <div className="flex items-end gap-12">
         <div className="flex flex-1 flex-col gap-3.5">
           <Mark size={56} />
-          <Heading light="Колода" bold="пуста" size={56} />
-          <p className="m-0 max-w-[560px] text-[15px] leading-[1.55] text-dim">
-            Все {placed} видео лежат по стопкам. Новые видео в {deckPath} появятся в колоде при следующем запуске.
-          </p>
+          {rest ? (
+            <>
+              <Heading light={rest.gone} bold="кончились" size={56} />
+              <p className="m-0 max-w-[560px] text-[15px] leading-[1.55] text-dim">В колоде осталось {rest.left} — переключись, чтобы разложить их.</p>
+            </>
+          ) : (
+            <>
+              <Heading light="Колода" bold="пуста" size={56} />
+              <p className="m-0 max-w-[560px] text-[15px] leading-[1.55] text-dim">
+                Все {filesWord(placed)} лежат по стопкам. Новые файлы в {deckPath} появятся в колоде при следующем запуске.
+              </p>
+            </>
+          )}
         </div>
         <div className="flex gap-2">
           <Button size={48} onClick={onJournal} hotkey="Ctrl J">
             Открыть журнал
           </Button>
-          <Button size={48} variant="primary" onClick={() => void openPath(tablePath)}>
-            Открыть стол в проводнике
-          </Button>
+          {rest ? (
+            <Button size={48} variant="primary" onClick={rest.onShow}>
+              {rest.show}
+            </Button>
+          ) : (
+            <Button size={48} variant="primary" onClick={() => void openPath(tablePath)}>
+              Открыть стол в проводнике
+            </Button>
+          )}
         </div>
       </div>
 
