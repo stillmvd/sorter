@@ -149,6 +149,11 @@ pub fn sync(conn: &Connection, deck: &str) -> AppResult<SyncResult> {
         .query_map(params![deck], |r| Ok((r.get::<_, String>(1)?.to_lowercase(), (r.get(0)?, r.get(2)?, r.get(3)?))))?
         .collect::<Result<_, _>>()?;
 
+    let busy: std::collections::HashSet<String> = conn
+        .prepare("SELECT i.from_path FROM move_item i JOIN move m ON m.id = i.move_id WHERE m.state IN ('pending','undoing')")?
+        .query_map([], |r| r.get::<_, String>(0))?
+        .map(|p| p.map(|p| p.to_lowercase()))
+        .collect::<Result<_, _>>()?;
     let present: HashMap<String, ()> = files.iter().map(|f| (f.0.to_lowercase(), ())).collect();
     let mut gone = Vec::new();
     for (name, (id, _, _)) in &rows {
@@ -169,7 +174,7 @@ pub fn sync(conn: &Connection, deck: &str) -> AppResult<SyncResult> {
                 )?;
             }
             Some(_) => {}
-            None if !ready(&dir.join(&name)) => pending = true,
+            None if !ready(&dir.join(&name)) || busy.contains(&dir.join(&name).to_string_lossy().to_lowercase()) => pending = true,
             None => {
                 let named = taken_from_name(&name);
                 conn.execute(
@@ -301,5 +306,15 @@ mod tests {
         .unwrap();
         let names: Vec<String> = window(&conn, &deck, 0, 10, "all").unwrap().into_iter().map(|c| c.file_name).collect();
         assert_eq!(names, vec!["a.MP4".to_string()]);
+        conn.execute("INSERT INTO pile(id, table_path, name, ord) VALUES (1, 'T', 'P', 0)", []).unwrap();
+        conn.execute("INSERT INTO move(id, at, method, pile_id, state) VALUES (1, 0, 'key', 1, 'undoing')", []).unwrap();
+        conn.execute(
+            "INSERT INTO move_item(move_id, from_path, step) VALUES (1, ?1, 'restoring')",
+            params![tmp.path().join("back.mp4").to_string_lossy()],
+        )
+        .unwrap();
+        fs::write(tmp.path().join("back.mp4"), b"b").unwrap();
+        let r = sync(&conn, &deck).unwrap();
+        assert!(r.added.is_empty() && r.pending);
     }
 }

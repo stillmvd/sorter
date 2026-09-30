@@ -519,6 +519,12 @@ fn return_cards(conn: &Connection, move_id: i64, items: &[Item]) -> AppResult<()
         )?;
         for (i, id) in cards.iter().enumerate() {
             conn.execute(
+                "UPDATE card SET status = 'gone' WHERE id != ?1 AND status IN ('in_deck','deferred')
+                   AND deck_path = (SELECT deck_path FROM card WHERE id = ?1)
+                   AND file_name = (SELECT file_name FROM card WHERE id = ?1) COLLATE NOCASE",
+                params![id],
+            )?;
+            conn.execute(
                 "UPDATE card SET status = 'in_deck', pile_id = NULL, current_path = NULL, position = ?2,
                  stage = CASE WHEN stage = 'meta' THEN 'new' ELSE stage END WHERE id = ?1",
                 params![id, top - (cards.len() - i) as f64],
@@ -780,6 +786,23 @@ mod tests {
         undo_last(&e.conn).unwrap();
         let all = place_series_with(&mut e.conn, &ids, &[], e.pile, true, "key", cross_free).unwrap();
         assert_eq!(all.items.len(), 5);
+    }
+
+    #[test]
+    fn undo_survives_twin_card_from_watcher() {
+        let mut e = env();
+        let c = card(&e, "a.jpg", b"a");
+        let m = place(&mut e.conn, &[c], e.pile, "key").unwrap();
+        e.conn
+            .execute(
+                "INSERT INTO card(deck_path, file_name, size, mtime, position) VALUES (?1, 'A.jpg', 1, 0, 99)",
+                params![e.deck.to_string_lossy()],
+            )
+            .unwrap();
+        undo(&e.conn, m.id).unwrap();
+        assert_eq!(status(&e, c), "in_deck");
+        let twins: i64 = e.conn.query_row("SELECT COUNT(*) FROM card WHERE status = 'in_deck'", [], |r| r.get(0)).unwrap();
+        assert_eq!(twins, 1);
     }
 
     #[test]
