@@ -33,7 +33,7 @@
 - [X] T013 [P] [US1] `src/components/deck/PhotoFacts.tsx`: блок сведений `raised` r 20 — «Снято» / «Дата из имени» / «Дата файла» с примечанием «даты съёмки в файле нет», «Камера», «Разрешение» с «N Мп», «Размер» с форматом (contracts/ui.md)
 - [X] T014 [US1] `src/components/deck/DeckScreen.tsx`: для фото вместо плёнки — `PhotoFacts`; ← → и Пробел не действуют на фото; подсказка «дальше …» отдельной строкой, кнопки «Положить», «В конец» без сжатия (`src/components/deck/HintBox.tsx`); строка клавиш для фото
 - [X] T015 [P] [US1] `src/components/deck/LastMove.tsx`: превью хода фото 64×48 из `0.jpg`
-- [ ] T016 [US1] Приёмка US1 через CDP: пункты 1–2 quickstart
+- [X] T016 [US1] Приёмка US1 через CDP: пункты 1–2 quickstart
 
 ## Phase 4: User Story 2 — Фильтр по типу (P1)
 
@@ -45,7 +45,7 @@
 - [X] T018 [P] [US2] `src/components/ui/KindFilter.tsx`: сегмент «Все N · Видео N · Фото N» (счётчик 11 px, opacity .7), вид как `Segment`
 - [X] T019 [US2] `src/components/deck/DeckScreen.tsx`: фильтр в шапке слева от режима (колода и стол), `refill`/`loadSheet` с `kind`, заголовок «Фото в колоде N» / «Видео в колоде N», плашка «Разложено X из Y фото»; сохранение `kind_filter`; фильтр прячется, если в колоде один тип
 - [X] T020 [US2] `src/components/screens/Done.tsx`: при пустом выбранном типе и оставшемся другом — «Фото кончились — осталось N видео» и кнопка «Показать видео»
-- [ ] T021 [US2] Приёмка US2 через CDP: пункт 3 quickstart
+- [X] T021 [US2] Приёмка US2 через CDP: пункт 3 quickstart
 
 ## Phase 5: Стопки и стол с фото (FR-006a, общее для US1–US3)
 
@@ -68,7 +68,7 @@
 - [X] T031 [US3] `src/components/deck/Card.tsx`: карта серии 440×380, снимок в фокусе, подложки влево по числу снимков, «снимок K из N», «Серия · ЧЧ:ММ:СС – ЧЧ:ММ:СС», галочка отмеченного
 - [X] T032 [US3] `src/components/deck/DeckScreen.tsx`: карта серии — ← → по снимкам, Пробел — отметить, клавиша стопки / Enter / перетаскивание → `placeSeries`, S → `splitSeries`, Tab — серия в конец (все снимки), подсказка по лучшему снимку «Отмеченные M просятся в стопку»; `onSeries` → перечитать окно
 - [X] T033 [US3] Стол: `src/components/table/Tile.tsx` + `src/components/deck/DeckScreen.tsx` — плитка серии (лучший снимок, подложки 4/−4 и 8/−8, «Серия · N»), отметка серии = все её снимки, «Отмечено K · F файлов», подсказка строки «серия уходит вся · выбрать лучшие — в колоде»
-- [ ] T034 [US3] Приёмка US3 через CDP: пункты 5–6 quickstart
+- [X] T034 [US3] Приёмка US3 через CDP: пункты 5–6 quickstart
 
 ## Phase 7: User Story 4 — Подсказки для фото (P2)
 
@@ -76,8 +76,8 @@
 
 **Independent Test**: 10 похожих фото в стопку — следующая похожая просится туда.
 
-- [ ] T035 [US4] Проверить `src-tauri/src/develop.rs` (`Learner::step`): фото получают вектор по `0.jpg`, холодные фото стопок учатся через `read_frames`; игнорируемый тест в `src-tauri/src/hints.rs` на `G:\sorter-test\photos`
-- [ ] T036 [US4] Приёмка US4 через CDP: пункт 7 quickstart (SC-006)
+- [X] T035 [US4] Проверить `src-tauri/src/develop.rs` (`Learner::step`): фото получают вектор по `0.jpg`, холодные фото стопок учатся через `read_frames`; игнорируемый тест в `src-tauri/src/hints.rs` на `G:\sorter-test\photos`
+- [X] T036 [US4] Приёмка US4 через CDP: пункт 7 quickstart (SC-006)
 
 ## Phase 8: User Story 5 — Дубли фото (P3)
 
@@ -89,12 +89,12 @@
 - [X] T038 [US5] `src-tauri/src/dupes/near.rs`: сравнение только внутри типа; для фото — ham ≤ 8 → `same` с уверенностью `100 − 5·ham`, иначе смысл ≥ 0.9 → `crop`; игнорируемый тест по `manifest.json` (SC-005)
 - [X] T039 [US5] `src-tauri/src/dupes/mod.rs`: `dupes_for` и `groups` пропускают пары одной серии; `copy_of` для фото — пиксели без битрейта; лучшая копия — разрешение, затем размер
 - [X] T040 [US5] `src/components/deck/DupeBadge.tsx`, `src/components/dupes/Compare.tsx`, `src/components/dupes/DupesScreen.tsx`: тексты для фото («та же фотография, меньше разрешение», «кадрирована»), сравнение двух картинок без воспроизведения, фильтр типа на экране «Дубли»
-- [ ] T041 [US5] Приёмка US5 через CDP: пункт 8 quickstart; ложные плашки на `G:\vk photos` ≤ 1
+- [X] T041 [US5] Приёмка US5 через CDP: пункт 8 quickstart; ложные плашки на `G:\vk photos` ≤ 1
 
 ## Phase 9: Polish
 
-- [ ] T042 Замер SC-002 скриптом CDP (50 переходов по фото, p95 ≤ 100 мс) и SC-007 на `G:\vk videos`
-- [ ] T043 [P] `src/components/deck/KeyLegend.tsx`: клавиши для фото и серии (← →, Пробел, S)
+- [X] T042 Замер SC-002 скриптом CDP (50 переходов по фото, p95 ≤ 100 мс) и SC-007 на `G:\vk videos`
+- [X] T043 [P] `src/components/deck/KeyLegend.tsx`: клавиши для фото и серии (← →, Пробел, S)
 - [ ] T044 [P] `README.md`, `RELEASE_NOTES.md`: фото, серии, фильтр
 - [X] T046 Окно при запуске — по центру экрана, не уезжает под панель задач (замечание пользователя 2026-09-30): `src-tauri/tauri.conf.json` / восстановление позиции `tauri-plugin-window-state`
 - [ ] T045 Полная приёмка quickstart 1–10, `cargo test`, `pnpm build`, проверки из CLAUDE.md проекта; обновить `HANDOFF.md`
