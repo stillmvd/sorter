@@ -95,9 +95,9 @@
 
 - [X] T042 Замер SC-002 скриптом CDP (50 переходов по фото, p95 ≤ 100 мс) и SC-007 на `G:\vk videos`
 - [X] T043 [P] `src/components/deck/KeyLegend.tsx`: клавиши для фото и серии (← →, Пробел, S)
-- [ ] T044 [P] `README.md`, `RELEASE_NOTES.md`: фото, серии, фильтр
+- [x] T044 [P] `README.md`, `RELEASE_NOTES.md`: фото, серии, фильтр
 - [X] T046 Окно при запуске — по центру экрана, не уезжает под панель задач (замечание пользователя 2026-09-30): `src-tauri/tauri.conf.json` / восстановление позиции `tauri-plugin-window-state`
-- [ ] T045 Полная приёмка quickstart 1–10, `cargo test`, `pnpm build`, проверки из CLAUDE.md проекта; обновить `HANDOFF.md`
+- [x] T045 Полная приёмка quickstart 1–10, `cargo test`, `pnpm build`, проверки из CLAUDE.md проекта; обновить `HANDOFF.md`
 
 ## Dependencies & Execution Order
 

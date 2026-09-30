@@ -192,7 +192,6 @@ export function DupesScreen({
                     </button>
                   ))}
                 </div>
-                <div className="text-xs whitespace-nowrap text-dim">{gi === at ? "Enter — оставить 1" : ""}</div>
               </div>
             );
           })}

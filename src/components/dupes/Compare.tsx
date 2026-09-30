@@ -259,7 +259,6 @@ export function Compare({
       </div>
 
       <div className="flex items-center gap-3">
-        <div className="text-[13px] text-dim">Играют синхронно · ← → — выбрать, какую оставить</div>
         <div className="flex-1" />
         <Button variant="ghost" size={44} hotkey="N" onClick={onDismiss} className="text-dim">
           {isPhotoPath(dupe.path) ? "Это разные фото" : "Это разные видео"}
