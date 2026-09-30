@@ -1,6 +1,6 @@
 import { Copy } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { isPhotoPath, media, type Card, type DupeView } from "../../lib/ipc";
+import { isPhotoPath, media, pileLabel, type Card, type DupeView } from "../../lib/ipc";
 import { Button } from "../ui/Button";
 
 type Side = {
@@ -72,7 +72,7 @@ export function Compare({
   const other: Side = {
     mine: false,
     path: dupe.path,
-    where: dupe.where === "pile" ? `в стопке «${dupe.pileName}»` : "в колоде",
+    where: dupe.where === "pile" ? `в стопке «${pileLabel(dupe)}»` : "в колоде",
     width: dupe.width,
     height: dupe.height,
     durationMs: dupe.durationMs,
@@ -90,7 +90,7 @@ export function Compare({
     dupe.kind === "trim" ? (role[i] === "оригинал" ? "оригинал" : "обрезку") : sides[i].mine ? "эту карту" : "копию";
   const action =
     keep.mine && dupe.where === "pile"
-      ? `Заменить копию в «${dupe.pileName}»`
+      ? `Заменить копию в «${pileLabel(dupe)}»`
       : `Оставить ${label(picked)}, ${label(1 - picked)} в Корзину`;
 
   const keys = useRef<(e: KeyboardEvent) => void>(() => {});
@@ -239,7 +239,7 @@ export function Compare({
                   <div className="truncate text-base font-bold" title={s.path}>
                     {name(s.path)}
                   </div>
-                  <div className="text-[13px] text-dim">
+                  <div className="truncate text-[13px] text-dim" title={s.where}>
                     {s.where}
                     {role[i] && ` · ${role[i]}`}
                   </div>

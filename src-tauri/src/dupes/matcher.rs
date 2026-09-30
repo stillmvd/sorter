@@ -1,6 +1,6 @@
 pub const FRAME_HAM: u32 = 12;
 pub const AUDIO_HAM: u32 = 10;
-const SAME_MIN: f32 = 0.6;
+pub const SAME_MIN: f32 = 0.6;
 const CROP_AUDIO: f32 = 0.9;
 const CROP_SEMANTIC: f32 = 0.85;
 const TRIM_MS: i64 = 1000;

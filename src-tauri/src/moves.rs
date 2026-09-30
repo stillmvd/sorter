@@ -279,6 +279,20 @@ pub fn move_with(
     group: Option<i64>,
     rename: RenameFn,
 ) -> AppResult<MoveView> {
+    move_into(conn, card_ids, paths, pile_id, Path::new(""), method, group, rename)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn move_into(
+    conn: &mut Connection,
+    card_ids: &[i64],
+    paths: &[PathBuf],
+    pile_id: i64,
+    sub: &Path,
+    method: &str,
+    group: Option<i64>,
+    rename: RenameFn,
+) -> AppResult<MoveView> {
     if card_ids.is_empty() && paths.is_empty() {
         return Err(AppError::new("NOTHING", "Нечего раскладывать — отметь хотя бы одну карту."));
     }
@@ -286,7 +300,10 @@ pub fn move_with(
     if !pile.is_trash && !pile.exists {
         return Err(AppError::new("PILE_GONE", format!("Папки стопки «{}» больше нет — её удалили или переименовали вне Sorter. Создай стопку заново.", pile.name)));
     }
-    let dir = Path::new(&pile.table_path).join(&pile.name);
+    let mut dir = Path::new(&pile.table_path).join(&pile.name);
+    if !sub.as_os_str().is_empty() {
+        dir.push(sub);
+    }
     let mut items = Vec::with_capacity(card_ids.len());
     let mut taken: Vec<String> = Vec::new();
     for &card_id in card_ids {
@@ -439,19 +456,18 @@ pub fn replace_copy(conn: &mut Connection, card_id: i64, worse: &Path) -> AppRes
 }
 
 pub fn replace_copy_with(conn: &mut Connection, card_id: i64, worse: &Path, rename: RenameFn) -> AppResult<Vec<MoveView>> {
-    let dir = worse.parent().unwrap_or(worse);
+    let table = table_path(conn)?;
+    let not_in_pile = || AppError::new("PILE_GONE", format!("«{}» лежит не в стопке — заменять нечего.", file_label(worse)));
+    let (name, _) = crate::dupes::pile_place(worse, &table).ok_or_else(not_in_pile)?;
+    let sub = worse.parent().and_then(|d| d.strip_prefix(Path::new(&table).join(&name)).ok()).map(Path::to_path_buf).unwrap_or_default();
     let pile: i64 = conn
-        .query_row(
-            "SELECT id FROM pile WHERE table_path = ?1 AND name = ?2 AND is_trash = 0",
-            params![dir.parent().unwrap_or(dir).to_string_lossy(), dir.file_name().unwrap_or_default().to_string_lossy()],
-            |r| r.get(0),
-        )
+        .query_row("SELECT id FROM pile WHERE table_path = ?1 AND name = ?2 AND is_trash = 0", params![table, name], |r| r.get(0))
         .optional()?
-        .ok_or_else(|| AppError::new("PILE_GONE", format!("«{}» лежит не в стопке — заменять нечего.", file_label(worse))))?;
+        .ok_or_else(not_in_pile)?;
     let trash = trash_pile(conn)?;
     let first = move_with(conn, &[], &[worse.to_path_buf()], trash, "key", None, rename)?;
     conn.execute("UPDATE move SET group_id = ?1 WHERE id = ?1", params![first.id])?;
-    match move_with(conn, &[card_id], &[], pile, "key", Some(first.id), rename) {
+    match move_into(conn, &[card_id], &[], pile, &sub, "key", Some(first.id), rename) {
         Ok(second) => Ok(vec![first, second]),
         Err(e) => {
             let _ = undo_with(conn, first.id, rename);
@@ -762,6 +778,22 @@ mod tests {
         assert!(e.deck.join("best.mp4").exists());
         assert_eq!(status(&e, c), "in_deck");
         assert!(worse.exists());
+    }
+
+    #[test]
+    fn replace_keeps_the_subfolder_of_worse() {
+        let mut e = env();
+        with_trash(&e);
+        let c = card(&e, "best.mp4", b"good");
+        let dir = e.table.join("Мемы").join("2019").join("лето");
+        fs::create_dir_all(&dir).unwrap();
+        let worse = dir.join("worse.mp4");
+        fs::write(&worse, b"bad").unwrap();
+        replace_copy_with(&mut e.conn, c, &worse, cross_free).unwrap();
+        assert!(dir.join("best.mp4").exists());
+        assert!(!worse.exists());
+        undo_last(&e.conn).unwrap();
+        assert!(e.deck.join("best.mp4").exists() && worse.exists());
     }
 
     #[test]

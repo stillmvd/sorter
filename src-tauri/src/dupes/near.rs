@@ -1,14 +1,16 @@
 use super::matcher::{self, Scores, AUDIO_HAM, FRAME_HAM};
 use super::print::{self, Print, FPS};
+use super::index::Index;
 use super::{files, FileInfo};
 use crate::hints::{self, Engine};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
-const STORE_MIN: i64 = 50;
+pub const STORE_MIN: i64 = 50;
 const MEAN_MIN: f32 = 0.6;
-const AUDIO_HITS: usize = 3;
+pub const AUDIO_HITS: usize = 3;
 const BATCH: usize = 16;
 
 fn u64s(b: &[u8]) -> Vec<u64> {
@@ -32,19 +34,30 @@ pub struct Entry {
     pub look: Vec<u8>,
 }
 
+const ENTRY: &str = "SELECT path, duration_ms, frames, audio, mean, look, rowid FROM fingerprint WHERE state = 'ok'";
+
+fn read_entry(r: &rusqlite::Row) -> rusqlite::Result<Entry> {
+    Ok(Entry {
+        path: r.get(0)?,
+        duration_ms: r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+        frames: u64s(&r.get::<_, Option<Vec<u8>>>(2)?.unwrap_or_default()),
+        audio: u32s(&r.get::<_, Option<Vec<u8>>>(3)?.unwrap_or_default()),
+        mean: hints::from_blob(&r.get::<_, Option<Vec<u8>>>(4)?.unwrap_or_default()),
+        look: r.get::<_, Option<Vec<u8>>>(5)?.unwrap_or_default(),
+    })
+}
+
+#[cfg(test)]
 pub fn entries(conn: &Connection) -> rusqlite::Result<Vec<Entry>> {
-    conn.prepare("SELECT path, duration_ms, frames, audio, mean, look FROM fingerprint WHERE state = 'ok'")?
-        .query_map([], |r| {
-            Ok(Entry {
-                path: r.get(0)?,
-                duration_ms: r.get::<_, Option<i64>>(1)?.unwrap_or(0),
-                frames: u64s(&r.get::<_, Option<Vec<u8>>>(2)?.unwrap_or_default()),
-                audio: u32s(&r.get::<_, Option<Vec<u8>>>(3)?.unwrap_or_default()),
-                mean: hints::from_blob(&r.get::<_, Option<Vec<u8>>>(4)?.unwrap_or_default()),
-                look: r.get::<_, Option<Vec<u8>>>(5)?.unwrap_or_default(),
-            })
-        })?
-        .collect()
+    conn.prepare(ENTRY)?.query_map([], read_entry)?.collect()
+}
+
+pub fn entries_with_rows(conn: &Connection) -> rusqlite::Result<Vec<(i64, Entry)>> {
+    conn.prepare(ENTRY)?.query_map([], |r| Ok((r.get(6)?, read_entry(r)?)))?.collect()
+}
+
+pub fn entry(conn: &Connection, path: &str) -> rusqlite::Result<Option<Entry>> {
+    conn.query_row(&format!("{ENTRY} AND path = ?1"), params![path], read_entry).optional()
 }
 
 fn semantic(conn: &Connection, path: &str) -> rusqlite::Result<Vec<Vec<f32>>> {
@@ -180,29 +193,41 @@ pub fn embed(engine: Option<&mut Engine>, p: &Print) -> Vec<Vec<f32>> {
     out
 }
 
+const IDLE: Duration = Duration::from_secs(5);
+
 pub struct Printer {
-    index: Option<Vec<Entry>>,
+    index: Option<Index>,
     version: i64,
+    idle_until: Option<Instant>,
 }
 
 impl Printer {
     pub fn new() -> Self {
-        Printer { index: None, version: -1 }
+        Printer { index: None, version: -1, idle_until: None }
     }
 
     pub fn step(&mut self, conn: &Connection, engine: Option<&mut Engine>) -> rusqlite::Result<Option<bool>> {
-        let Some(file) = next_file(conn)? else { return Ok(None) };
+        if self.idle_until.is_some_and(|t| Instant::now() < t) {
+            return Ok(None);
+        }
+        let Some(file) = next_file(conn)? else {
+            self.idle_until = Some(Instant::now() + IDLE);
+            return Ok(None);
+        };
+        self.idle_until = None;
         let print = print::print(Path::new(&file.path));
         let vectors = print.as_ref().map(|p| embed(engine, p)).unwrap_or_default();
         save_print(conn, &file, print.as_ref(), &vectors)?;
         let Some(p) = print else { return Ok(Some(false)) };
         let version: i64 = conn.query_row("PRAGMA data_version", [], |r| r.get(0))?;
-        if self.index.is_none() || version != self.version {
-            self.index = Some(entries(conn)?);
-            self.version = version;
+        match self.index.as_mut() {
+            None => self.index = Some(Index::load(conn)?),
+            Some(index) if version != self.version => index.sync(conn)?,
+            Some(_) => {}
         }
+        self.version = version;
         let index = self.index.as_mut().unwrap();
-        index.retain(|e| e.path != file.path);
+        index.remove(&file.path);
         let me = Entry {
             path: file.path.clone(),
             duration_ms: p.duration_ms,
@@ -213,7 +238,7 @@ impl Printer {
         };
         let audio_set: HashSet<u32> = me.audio.iter().copied().collect();
         let mut changed = false;
-        for other in index.iter() {
+        for other in index.candidates(&me) {
             if !Path::new(&other.path).is_file() {
                 continue;
             }
@@ -223,7 +248,7 @@ impl Printer {
                 }
             }
         }
-        index.push(me);
+        index.insert(me);
         Ok(Some(changed))
     }
 }

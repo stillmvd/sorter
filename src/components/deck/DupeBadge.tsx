@@ -1,5 +1,5 @@
 import { Copy } from "lucide-react";
-import { isPhotoPath, type DupeView, type Pile } from "../../lib/ipc";
+import { isPhotoPath, pileLabel, type DupeView, type Pile } from "../../lib/ipc";
 import { Button } from "../ui/Button";
 import { Kbd } from "../ui/Kbd";
 
@@ -49,7 +49,7 @@ export function DupeBadge({
   onDismiss: () => void;
   onDefer: () => void;
 }) {
-  const where = dupe.where === "pile" ? `уже лежит в «${dupe.pileName}»` : "копия в колоде";
+  const where = dupe.where === "pile" ? `уже лежит в «${pileLabel(dupe)}»` : "копия в колоде";
   const meta = [
     name(dupe.path),
     dupe.width && dupe.height ? `${dupe.width}×${dupe.height}` : null,

@@ -70,6 +70,7 @@ export type GroupItem = {
   path: string;
   where: "deck" | "pile";
   pileName: string | null;
+  pileSub: string | null;
   cardId: number | null;
   durationMs: number | null;
   width: number | null;
@@ -93,6 +94,7 @@ export type DupeView = {
   path: string;
   where: "deck" | "pile";
   pileName: string | null;
+  pileSub: string | null;
   cardId: number | null;
   kind: DupeKind;
   confidence: number;
@@ -108,6 +110,9 @@ export type DupeView = {
   semantic: number | null;
   better: boolean;
 };
+
+export const pileLabel = (d: { pileName: string | null; pileSub: string | null }) =>
+  d.pileSub ? `${d.pileName} / ${d.pileSub}` : (d.pileName ?? "");
 
 export type Settings = Partial<
   Record<"deck_path" | "table_path" | "hints_enabled" | "theme" | "muted" | "mode" | "volume" | "updates" | "kind_filter" | "series_rest", string>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { isPhotoPath, media, type DupeGroup, type GroupItem } from "../../lib/ipc";
+import { isPhotoPath, media, pileLabel, type DupeGroup, type GroupItem } from "../../lib/ipc";
 import { plural } from "../../lib/plural";
 import { Button } from "../ui/Button";
 
@@ -187,7 +187,9 @@ export function DupesScreen({
                           {name(it.path)}
                         </span>
                         <span className="text-xs text-dim">{meta(it)}</span>
-                        <span className="text-xs text-dim">{it.where === "pile" ? `в стопке «${it.pileName}»` : "в колоде"}</span>
+                        <span className="truncate text-xs text-dim" title={it.where === "pile" ? pileLabel(it) : undefined}>
+                          {it.where === "pile" ? `в стопке «${pileLabel(it)}»` : "в колоде"}
+                        </span>
                       </span>
                     </button>
                   ))}

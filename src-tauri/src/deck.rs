@@ -75,6 +75,11 @@ pub fn is_media(path: &Path) -> bool {
     is_video(path) || is_photo(path)
 }
 
+pub fn media_name(name: &str) -> bool {
+    let ext = Path::new(name).extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    !name.starts_with('.') && (VIDEO_EXT.contains(&ext.as_str()) || PHOTO_EXT.contains(&ext.as_str()))
+}
+
 pub fn photo_name(name: &str) -> bool {
     Path::new(name).extension().map(|e| PHOTO_EXT.contains(&e.to_string_lossy().to_lowercase().as_str())).unwrap_or(false)
 }

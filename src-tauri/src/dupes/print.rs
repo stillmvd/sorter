@@ -70,30 +70,70 @@ impl Plane {
         Plane { w, h, pix }
     }
 
-    fn at(&self, x: f32, y: f32) -> f32 {
-        let x = (x - 0.5).clamp(0.0, (self.w - 1) as f32);
-        let y = (y - 0.5).clamp(0.0, (self.h - 1) as f32);
-        let (x0, y0) = (x.floor() as usize, y.floor() as usize);
-        let (x1, y1) = ((x0 + 1).min(self.w - 1), (y0 + 1).min(self.h - 1));
-        let (fx, fy) = (x - x0 as f32, y - y0 as f32);
-        let p = |x: usize, y: usize| self.pix[y * self.w + x];
-        (p(x0, y0) * (1.0 - fx) + p(x1, y0) * fx) * (1.0 - fy) + (p(x0, y1) * (1.0 - fx) + p(x1, y1) * fx) * fy
+    fn grid(&self, cells: usize, x0: f32, y0: f32, rw: f32, rh: f32) -> Vec<f32> {
+        let mut out = Vec::with_capacity(cells * cells);
+        self.grid_into(cells, x0, y0, rw, rh, &mut out);
+        out
     }
 
-    fn grid(&self, cells: usize, x0: f32, y0: f32, rw: f32, rh: f32) -> Vec<f32> {
+    fn axis(v: f32, len: usize) -> (usize, usize, f32) {
+        let v = (v - 0.5).clamp(0.0, (len - 1) as f32);
+        let v0 = v.floor() as usize;
+        (v0, (v0 + 1).min(len - 1), v - v0 as f32)
+    }
+
+    fn grid_into(&self, cells: usize, x0: f32, y0: f32, rw: f32, rh: f32, out: &mut Vec<f32>) {
         let (cw, ch) = (rw / cells as f32, rh / cells as f32);
-        let mut out: Vec<f32> = (0..cells * cells)
-            .map(|k| {
-                let (cx, cy) = (x0 + (k % cells) as f32 * cw, y0 + (k / cells) as f32 * ch);
-                [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)].iter().map(|(u, v)| self.at(cx + u * cw, cy + v * ch)).sum::<f32>() / 4.0
-            })
-            .collect();
+        let side = |start: f32, step: f32, len: usize| -> Vec<[(usize, usize, f32); 2]> {
+            (0..cells)
+                .map(|i| {
+                    let c = start + i as f32 * step;
+                    [Self::axis(c + 0.25 * step, len), Self::axis(c + 0.75 * step, len)]
+                })
+                .collect()
+        };
+        let (xs, ys) = (side(x0, cw, self.w), side(y0, ch, self.h));
+        let p = |x: usize, y: usize| self.pix[y * self.w + x];
+        let at = |(x0, x1, fx): (usize, usize, f32), (y0, y1, fy): (usize, usize, f32)| {
+            (p(x0, y0) * (1.0 - fx) + p(x1, y0) * fx) * (1.0 - fy) + (p(x0, y1) * (1.0 - fx) + p(x1, y1) * fx) * fy
+        };
+        out.clear();
+        out.extend((0..cells * cells).map(|k| {
+            let (x, y) = (&xs[k % cells], &ys[k / cells]);
+            [(0, 0), (1, 0), (0, 1), (1, 1)].iter().map(|&(u, v)| at(x[u], y[v])).sum::<f32>() / 4.0
+        }));
         let n = out.len() as f32;
         let mean = out.iter().sum::<f32>() / n;
         let sd = (out.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / n).sqrt().max(1e-3);
         out.iter_mut().for_each(|v| *v = (*v - mean) / sd);
-        out
     }
+}
+
+fn coarse_search(hb: &Plane, target: &[f32], aspect: f32, widths: &[usize]) -> Option<(f32, usize, f32, f32, f32)> {
+    let mut best: Option<(f32, usize, f32, f32, f32)> = None;
+    let mut buf = Vec::with_capacity(target.len());
+    for &w in widths {
+        let rw = w as f32;
+        let rh = rw * aspect;
+        if rh > hb.h as f32 + 0.5 {
+            continue;
+        }
+        let rh = rh.min(hb.h as f32);
+        let (mut y, ymax, xmax) = (0.0f32, hb.h as f32 - rh, hb.w as f32 - rw);
+        while y <= ymax {
+            let mut x = 0.0f32;
+            while x <= xmax {
+                hb.grid_into(16, x, y, rw, rh, &mut buf);
+                let c = corr(&buf, target);
+                if c > best.map_or(f32::MIN, |b| b.0) {
+                    best = Some((c, w, y, x, rw));
+                }
+                x += 1.0;
+            }
+            y += 1.0;
+        }
+    }
+    best
 }
 
 fn corr(a: &[f32], b: &[f32]) -> f32 {
@@ -105,27 +145,22 @@ pub fn contains(big: &[u8], small: &[u8]) -> (f32, f32) {
     let aspect = small.h as f32 / small.w as f32;
     let (hb, hs) = (big.half(), small.half());
     let target = hs.grid(16, 0.0, 0.0, hs.w as f32, hs.h as f32);
-    let mut coarse = (f32::MIN, 0.0f32, 0.0f32, hb.w as f32);
-    for rw in (hb.w / 2).max(8)..=hb.w {
-        let rw = rw as f32;
-        let rh = rw * aspect;
-        if rh > hb.h as f32 + 0.5 {
-            continue;
-        }
-        let rh = rh.min(hb.h as f32);
-        let (mut y, ymax, xmax) = (0.0f32, hb.h as f32 - rh, hb.w as f32 - rw);
-        while y <= ymax {
-            let mut x = 0.0f32;
-            while x <= xmax {
-                let c = corr(&hb.grid(16, x, y, rw, rh), &target);
-                if c > coarse.0 {
-                    coarse = (c, x, y, rw);
-                }
-                x += 1.0;
-            }
-            y += 1.0;
-        }
-    }
+    let widths: Vec<usize> = ((hb.w / 2).max(8)..=hb.w).collect();
+    let threads = std::thread::available_parallelism().map_or(1, |n| (n.get() / 2).max(1)).min(widths.len().max(1));
+    let found: Vec<(f32, usize, f32, f32, f32)> = std::thread::scope(|s| {
+        let jobs: Vec<_> = (0..threads)
+            .map(|t| {
+                let mine: Vec<usize> = widths.iter().copied().skip(t).step_by(threads).collect();
+                let (hb, target) = (&hb, &target);
+                s.spawn(move || coarse_search(hb, target, aspect, &mine))
+            })
+            .collect();
+        jobs.into_iter().filter_map(|j| j.join().unwrap_or_else(|e| std::panic::resume_unwind(e))).collect()
+    });
+    let coarse = found
+        .into_iter()
+        .min_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then((a.1, a.2, a.3).partial_cmp(&(b.1, b.2, b.3)).unwrap()))
+        .map_or((f32::MIN, 0.0f32, 0.0f32, hb.w as f32), |(c, _, y, x, rw)| (c, x, y, rw));
     let target = small.grid(48, 0.0, 0.0, small.w as f32, small.h as f32);
     let (_, cx, cy, crw) = (coarse.0, coarse.1 * 2.0, coarse.2 * 2.0, coarse.3 * 2.0);
     let mut best = (0.0f32, 1.0f32);

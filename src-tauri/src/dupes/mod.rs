@@ -1,3 +1,4 @@
+pub mod index;
 pub mod matcher;
 pub mod near;
 pub mod print;
@@ -22,10 +23,50 @@ pub struct FileInfo {
     pub mtime: i64,
 }
 
-fn info(path: &Path) -> Option<FileInfo> {
-    let meta = fs::metadata(path).ok()?;
+fn entry_info(e: &fs::DirEntry) -> Option<FileInfo> {
+    let meta = e.metadata().ok()?;
     let mtime = meta.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_millis() as i64;
-    Some(FileInfo { path: path.to_string_lossy().into_owned(), size: meta.len() as i64, mtime })
+    Some(FileInfo { path: e.path().to_string_lossy().into_owned(), size: meta.len() as i64, mtime })
+}
+
+fn hidden(e: &fs::DirEntry) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        e.metadata().map(|m| m.file_attributes() & 0x6 != 0).unwrap_or(false)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = e;
+        false
+    }
+}
+
+fn walk(dir: &Path, out: &mut Vec<FileInfo>) {
+    let Ok(it) = fs::read_dir(dir) else { return };
+    for e in it.filter_map(|e| e.ok()) {
+        let Ok(kind) = e.file_type() else { continue };
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        if kind.is_dir() {
+            if !name.starts_with(['.', '$', '@']) && !hidden(&e) {
+                walk(&e.path(), out);
+            }
+        } else if kind.is_file() && deck::media_name(&name) {
+            out.extend(entry_info(&e));
+        }
+    }
+}
+
+pub fn pile_place(path: &Path, table: &str) -> Option<(String, Option<String>)> {
+    if table.is_empty() {
+        return None;
+    }
+    let rel = path.parent()?.strip_prefix(table).ok()?;
+    let mut parts = rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned());
+    let pile = parts.next()?;
+    let sub: Vec<String> = parts.collect();
+    Some((pile, (!sub.is_empty()).then(|| sub.join(" / "))))
 }
 
 pub fn repath(conn: &Connection, from: &Path, to: &Path) -> rusqlite::Result<()> {
@@ -62,14 +103,22 @@ pub fn files(conn: &Connection) -> rusqlite::Result<Vec<FileInfo>> {
         .prepare("SELECT file_name FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred') ORDER BY status = 'deferred', position")?
         .query_map(params![deck], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
-    out.extend(names.iter().filter_map(|n| info(&Path::new(&deck).join(n))));
+    if !names.is_empty() {
+        let mut listed: HashMap<String, FileInfo> = fs::read_dir(&deck)
+            .map(|it| {
+                it.filter_map(|e| e.ok())
+                    .filter_map(|e| Some((e.file_name().to_string_lossy().to_lowercase(), entry_info(&e)?)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.extend(names.iter().filter_map(|n| listed.remove(&n.to_lowercase())));
+    }
     let piles: Vec<String> = conn
         .prepare("SELECT name FROM pile WHERE table_path = ?1 AND is_trash = 0 AND exists_on_disk = 1")?
         .query_map(params![table], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
     for name in piles {
-        let Ok(dir) = fs::read_dir(Path::new(&table).join(&name)) else { continue };
-        out.extend(dir.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| deck::is_media(p)).filter_map(|p| info(&p)));
+        walk(&Path::new(&table).join(&name), &mut out);
     }
     Ok(out)
 }
@@ -170,6 +219,7 @@ pub struct DupeView {
     #[serde(rename = "where")]
     place: &'static str,
     pile_name: Option<String>,
+    pile_sub: Option<String>,
     card_id: Option<i64>,
     kind: String,
     confidence: i64,
@@ -292,18 +342,16 @@ pub fn dupes_for(conn: &Connection, card_id: i64) -> AppResult<Vec<DupeView>> {
             continue;
         }
         let (copy, width, height, duration_ms) = copy_of(conn, &other, &deck)?;
-        let pile_name = copy
-            .in_pile
-            .then(|| p.parent().filter(|d| d.parent().map(|t| t == Path::new(&table)).unwrap_or(false)))
-            .flatten()
-            .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()));
-        if copy.in_pile && pile_name.is_none() {
+        let spot = copy.in_pile.then(|| pile_place(&p, &table)).flatten();
+        if copy.in_pile && spot.is_none() {
             continue;
         }
+        let (pile_name, pile_sub) = spot.map(|(n, s)| (Some(n), s)).unwrap_or_default();
         out.push(DupeView {
             path: other,
             place: if copy.in_pile { "pile" } else { "deck" },
             pile_name,
+            pile_sub,
             card_id: copy.card_id,
             kind,
             confidence,
@@ -385,6 +433,42 @@ mod tests {
         let g = groups(&conn).unwrap();
         assert_eq!((g.groups.len(), g.groups[0].items.len(), g.groups[0].pairs.len()), (1, 3, 2));
     }
+
+    #[test]
+    fn pile_subfolders_take_part_and_are_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let deck = dir.path().join("deck");
+        let table = dir.path().join("table");
+        let deep = table.join("Музыка").join("2019").join("лето");
+        fs::create_dir_all(&deck).unwrap();
+        fs::create_dir_all(&deep).unwrap();
+        fs::create_dir_all(table.join("Музыка").join(".thumbs")).unwrap();
+        fs::write(deck.join("a.mp4"), b"same").unwrap();
+        fs::write(deep.join("e.mp4"), b"same").unwrap();
+        fs::write(deep.join("notes.txt"), b"same").unwrap();
+        fs::write(table.join("Музыка").join(".thumbs").join("x.mp4"), b"same").unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        db::init(&conn).unwrap();
+        db::set_setting(&conn, "deck_path", &deck.to_string_lossy()).unwrap();
+        db::set_setting(&conn, "table_path", &table.to_string_lossy()).unwrap();
+        conn.execute("INSERT INTO pile(table_path, name, ord) VALUES (?1, 'Музыка', 0)", params![table.to_string_lossy()]).unwrap();
+        conn.execute(
+            "INSERT INTO card(deck_path, file_name, size, mtime, position) VALUES (?1, 'a.mp4', 4, 0, 0)",
+            params![deck.to_string_lossy()],
+        )
+        .unwrap();
+        let listed: Vec<String> = files(&conn).unwrap().into_iter().map(|f| f.path).collect();
+        assert_eq!(listed, vec![deck.join("a.mp4").to_string_lossy().into_owned(), deep.join("e.mp4").to_string_lossy().into_owned()]);
+        assert!(refresh_exact(&conn).unwrap());
+        let views = dupes_for(&conn, 1).unwrap();
+        assert_eq!(views.len(), 1);
+        assert_eq!((views[0].pile_name.as_deref(), views[0].pile_sub.as_deref()), (Some("Музыка"), Some("2019 / лето")));
+        let g = groups(&conn).unwrap();
+        let item = g.groups[0].items.iter().find(|i| i.place == "pile").unwrap();
+        assert_eq!((item.pile_name.as_deref(), item.pile_sub.as_deref()), (Some("Музыка"), Some("2019 / лето")));
+        assert_eq!(pile_place(&table.join("Музыка").join("f.mp4"), &table.to_string_lossy()), Some(("Музыка".into(), None)));
+        assert_eq!(pile_place(&deck.join("a.mp4"), &table.to_string_lossy()), None);
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -394,6 +478,7 @@ pub struct GroupItem {
     #[serde(rename = "where")]
     place: &'static str,
     pile_name: Option<String>,
+    pile_sub: Option<String>,
     card_id: Option<i64>,
     duration_ms: Option<i64>,
     width: Option<i64>,
@@ -486,17 +571,22 @@ pub fn groups(conn: &Connection) -> AppResult<Groups> {
         let mut items: Vec<GroupItem> = copies
             .into_iter()
             .enumerate()
-            .map(|(i, (path, copy, width, height, duration_ms))| GroupItem {
-                pile_name: copy.in_pile.then(|| pile_of(Path::new(&path), &table)).flatten(),
-                place: if copy.in_pile { "pile" } else { "deck" },
-                card_id: copy.card_id,
-                duration_ms,
-                width,
-                height,
-                bitrate: Some(copy.bitrate).filter(|b| *b > 0),
-                size: fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0),
-                best: Some(i) == best,
-                path,
+            .map(|(i, (path, copy, width, height, duration_ms))| {
+                let (pile_name, pile_sub) =
+                    copy.in_pile.then(|| pile_place(Path::new(&path), &table)).flatten().map(|(n, s)| (Some(n), s)).unwrap_or_default();
+                GroupItem {
+                    pile_name,
+                    pile_sub,
+                    place: if copy.in_pile { "pile" } else { "deck" },
+                    card_id: copy.card_id,
+                    duration_ms,
+                    width,
+                    height,
+                    bitrate: Some(copy.bitrate).filter(|b| *b > 0),
+                    size: fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0),
+                    best: Some(i) == best,
+                    path,
+                }
             })
             .collect();
         items.sort_by_key(|i| !i.best);
@@ -511,11 +601,6 @@ pub fn groups(conn: &Connection) -> AppResult<Groups> {
     out.sort_by_key(|g| (g.kind != "exact", -g.confidence));
     let (printed, total) = printed(conn)?;
     Ok(Groups { groups: out, printed, total })
-}
-
-fn pile_of(p: &Path, table: &str) -> Option<String> {
-    let dir = p.parent()?;
-    (dir.parent()? == Path::new(table)).then(|| dir.file_name().map(|n| n.to_string_lossy().into_owned())).flatten()
 }
 
 pub fn printed(conn: &Connection) -> rusqlite::Result<(i64, i64)> {
