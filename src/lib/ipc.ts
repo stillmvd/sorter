@@ -77,6 +77,7 @@ export type GroupItem = {
   height: number | null;
   bitrate: number | null;
   size: number;
+  takenAt: number | null;
   best: boolean;
 };
 

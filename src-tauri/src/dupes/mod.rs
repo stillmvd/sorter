@@ -485,6 +485,7 @@ pub struct GroupItem {
     height: Option<i64>,
     bitrate: Option<i64>,
     size: i64,
+    taken_at: Option<i64>,
     best: bool,
 }
 
@@ -584,6 +585,7 @@ pub fn groups(conn: &Connection) -> AppResult<Groups> {
                     height,
                     bitrate: Some(copy.bitrate).filter(|b| *b > 0),
                     size: fs::metadata(&path).map(|m| m.len() as i64).unwrap_or(0),
+                    taken_at: (copy.taken_at != i64::MAX).then_some(copy.taken_at),
                     best: Some(i) == best,
                     path,
                 }

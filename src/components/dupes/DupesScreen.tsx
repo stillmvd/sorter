@@ -34,6 +34,8 @@ function note(g: DupeGroup) {
   return `${g.confidence}% · ${n} ${plural(n, "копия", "копии", "копий")}`;
 }
 
+export const groupTitle = (g: DupeGroup) => (g.kind === "same" && isPhotoPath(g.items[0]?.path ?? "") ? "Та же фотография" : KIND[g.kind]);
+
 function meta(i: GroupItem) {
   return [i.width && i.height ? `${i.width}×${i.height}` : null, i.durationMs ? clock(i.durationMs) : null, mb(i.size)].filter(Boolean).join(" · ");
 }
@@ -52,6 +54,7 @@ export function DupesScreen({
   onKeep,
   onDismiss,
   onTrashExact,
+  onCompare,
 }: {
   groups: DupeGroup[];
   filter: Filter | null;
@@ -59,6 +62,7 @@ export function DupesScreen({
   onKeep: (keep: GroupItem, drop: GroupItem[]) => void;
   onDismiss: (g: DupeGroup) => void;
   onTrashExact: (paths: string[]) => void;
+  onCompare: (g: DupeGroup) => void;
 }) {
   const shown = useMemo(() => groups.filter((g) => inFilter(g, filter)), [groups, filter]);
   const [focus, setFocus] = useState(0);
@@ -102,6 +106,9 @@ export function DupesScreen({
     } else if (e.code === "KeyN" && g) {
       e.preventDefault();
       onDismiss(g);
+    } else if (e.code === "KeyC" && g) {
+      e.preventDefault();
+      onCompare(g);
     }
   };
   useEffect(() => {
@@ -157,7 +164,7 @@ export function DupesScreen({
               >
                 <div className="flex w-[200px] shrink-0 flex-col gap-1">
                   <div className="text-xs font-medium text-dim">{note(g)}</div>
-                  <div className="text-lg font-bold">{g.kind === "same" && isPhotoPath(g.items[0]?.path ?? "") ? "Та же фотография" : KIND[g.kind]}</div>
+                  <div className="text-lg font-bold">{groupTitle(g)}</div>
                 </div>
                 <div className="flex min-w-0 flex-1 flex-wrap gap-3">
                   {g.items.map((it, ii) => (
@@ -200,7 +207,7 @@ export function DupesScreen({
         </div>
       )}
       <div className="text-[13px] text-dim">
-        ↑ ↓ — группа · ← → — какую оставить · Enter — остальные в Корзину · N — это разные файлы · Ctrl Z — забрать
+        ↑ ↓ — группа · ← → — какую оставить · Enter — остальные в Корзину · C — сравнить крупно · N — это разные файлы · Ctrl Z — забрать
       </div>
     </div>
   );

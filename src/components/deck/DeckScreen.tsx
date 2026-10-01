@@ -30,7 +30,8 @@ import { ContactSheet } from "../table/ContactSheet";
 import { Segment } from "../ui/Segment";
 import { PilesRow } from "./PilesRow";
 import { Compare } from "../dupes/Compare";
-import { DupesScreen, SURE, type Filter } from "../dupes/DupesScreen";
+import { DupesScreen, SURE, groupTitle, type Filter } from "../dupes/DupesScreen";
+import { GroupCompare } from "../dupes/GroupCompare";
 
 const mb = (b: number) => `${(b / 1024 ** 2).toFixed(1).replace(".", ",")} МБ`;
 const date = (ms: number) => new Date(ms).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
@@ -88,6 +89,7 @@ export function DeckScreen({
   const [toast, setToast] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
   const [comparing, setComparing] = useState(false);
+  const [groupCmp, setGroupCmp] = useState<DupeGroup | null>(null);
   const [muted, setMuted] = useState(initial.settings.muted !== "0");
   const [volume, setVolume] = useState(() => Number(initial.settings.volume ?? "0.7"));
   const [menu, setMenu] = useState<{ pile: Pile; x: number; y: number } | null>(null);
@@ -184,6 +186,24 @@ export function DeckScreen({
       void loadGroups();
     },
     [loadGroups],
+  );
+
+  const resolveGroup = useCallback(
+    async (keep: GroupItem[], trash: GroupItem[], not: GroupItem[]) => {
+      setGroupCmp(null);
+      const rest = [...keep, ...trash];
+      try {
+        for (const n of not) for (const r of rest) await ipc.dismissDupe(n.path, r.path);
+      } catch (e) {
+        setToast(errorText(e));
+      }
+      if (trash.length) await trashPaths(trash.map((t) => t.path));
+      else {
+        play("defer");
+        void loadGroups();
+      }
+    },
+    [trashPaths, loadGroups],
   );
 
   const refill = useCallback(async () => {
@@ -867,6 +887,7 @@ export function DeckScreen({
           onKeep={(_: GroupItem, drop: GroupItem[]) => void trashPaths(drop.map((d) => d.path))}
           onDismiss={(g) => void dismissGroup(g)}
           onTrashExact={(paths) => void trashPaths(paths)}
+          onCompare={setGroupCmp}
         />
       ) : mode === "table" ? (
         <ContactSheet
@@ -1067,6 +1088,14 @@ export function DeckScreen({
         >
           {toast}
         </div>
+      )}
+      {groupCmp && mode === "dupes" && (
+        <GroupCompare
+          group={groupCmp}
+          title={groupTitle(groupCmp)}
+          onDone={(keep, trash, not) => void resolveGroup(keep, trash, not)}
+          onClose={() => setGroupCmp(null)}
+        />
       )}
       {comparing && mode === "deck" && current && dupe && (
         <Compare
