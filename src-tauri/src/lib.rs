@@ -56,7 +56,10 @@ pub fn run() {
             std::thread::spawn(move || responder.respond(media::serve(&app, &request)));
         })
         .setup(|app| {
-            let data_dir = app.path().app_data_dir()?;
+            let data_dir = match std::env::var_os("SORTER_DATA") {
+                Some(dir) => dir.into(),
+                None => app.path().app_data_dir()?,
+            };
             std::fs::create_dir_all(data_dir.join("cache"))?;
             let conn = db::open(&data_dir.join("sorter.db"))?;
             if let Err(e) = moves::recover(&conn) {
