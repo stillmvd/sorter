@@ -255,6 +255,22 @@ impl Printer {
 
 #[cfg(all(test, windows))]
 mod tests {
+    #[test]
+    #[ignore]
+    fn bench_next_file() {
+        let Ok(db) = std::env::var("SORTER_DB") else { return };
+        let conn = Connection::open(db).unwrap();
+        let t = std::time::Instant::now();
+        for _ in 0..10 {
+            next_file(&conn).unwrap();
+        }
+        println!("next_file: {:?}", t.elapsed() / 10);
+        let t = std::time::Instant::now();
+        let f = next_file(&conn).unwrap().unwrap();
+        let _ = crate::dupes::print::print(Path::new(&f.path));
+        println!("print: {:?}", t.elapsed());
+    }
+
     use super::*;
 
     fn entry(path: &Path) -> Option<(Entry, Print)> {

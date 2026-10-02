@@ -1,7 +1,7 @@
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Copy, Folder, FolderOpen, History, Image as ImageIcon, LayoutGrid, Layers, Plus, Settings, Video } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
-import { errorText, ipc, onCard, onDeckChanged, onDupesChanged, onPilesChanged, onProgress, onSeries, type AppState, type Card, type DupeGroup, type DupeGroups, type DupeView, type GroupItem, type Kind, type Method, type Move, type Pile, type SeriesView } from "../../lib/ipc";
+import { errorText, ipc, mergeCards, onCards, onDeckChanged, onDupesChanged, onPilesChanged, onProgress, onSeries, type AppState, type Card, type DupeGroup, type DupeGroups, type DupeView, type GroupItem, type Kind, type Method, type Move, type Pile, type SeriesView } from "../../lib/ipc";
 import { SeriesPanel, seriesSpan, type Rest } from "./SeriesPanel";
 import { KindFilter } from "../ui/KindFilter";
 import { isPhotoPath } from "../../lib/ipc";
@@ -235,9 +235,9 @@ export function DeckScreen({
   }, []);
 
   useEffect(() => {
-    const offCard = onCard((card) => {
-      setCards((cs) => cs.map((c) => (c.id === card.id ? { ...c, ...card } : c)));
-      setSheet((cs) => cs.map((c) => (c.id === card.id ? { ...c, ...card } : c)));
+    const offCard = onCards((fresh) => {
+      setCards((cs) => mergeCards(cs, fresh));
+      setSheet((cs) => mergeCards(cs, fresh));
     });
     const offProgress = onProgress(setDeveloping);
     const offDeck = onDeckChanged(({ added, gone }) => {

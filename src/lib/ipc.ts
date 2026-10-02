@@ -143,7 +143,11 @@ export const isPhotoPath = (path: string) => /\.(jpe?g|png|webp|gif)$/i.test(pat
 export const frameSrc = (cacheDir: string, card: Card, i: number) =>
   `${media([cacheDir, card.id, `${i}.jpg`].join("\\"))}?s=${card.stage}${card.frames}`;
 
-export const onCard = (fn: (card: Card) => void) => listen<Card>("develop://card", (e) => fn(e.payload));
+export const onCards = (fn: (cards: Card[]) => void) => listen<Card[]>("develop://cards", (e) => fn(e.payload));
+export const mergeCards = (list: Card[], fresh: Card[]) => {
+  const byId = new Map(fresh.map((c) => [c.id, c]));
+  return list.some((c) => byId.has(c.id)) ? list.map((c) => (byId.has(c.id) ? { ...c, ...byId.get(c.id) } : c)) : list;
+};
 export const onDeckChanged = (fn: (d: { added: Card[]; gone: number[] }) => void) =>
   listen<{ added: Card[]; gone: number[] }>("deck://changed", (e) => fn(e.payload));
 export const onPilesChanged = (fn: (p: Pile[]) => void) => listen<Pile[]>("piles://changed", (e) => fn(e.payload));

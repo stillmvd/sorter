@@ -1,5 +1,5 @@
 use crate::db;
-use crate::deck::{self, CardView};
+use crate::deck;
 use crate::dupes;
 use crate::hints::{self, Engine};
 use crate::photo;
@@ -209,9 +209,8 @@ fn next(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<(i64, PathBuf)>
     rows.collect()
 }
 
-fn progress(conn: &Connection, paused: bool) -> rusqlite::Result<Progress> {
+fn progress(conn: &Connection, paused: bool, printed: i64) -> rusqlite::Result<Progress> {
     let deck = db::get_setting(conn, "deck_path")?.unwrap_or_default();
-    let (printed, _) = dupes::printed(conn)?;
     conn.query_row(
         "SELECT SUM(stage != 'new'), COUNT(*) FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred')",
         params![deck],
@@ -232,6 +231,29 @@ fn save_jpeg(file: &Path, img: &image::RgbImage) -> bool {
             enc.encode_image(img).ok()
         })
         .is_some()
+}
+
+fn lower_priority() {
+    #[cfg(windows)]
+    unsafe {
+        use windows::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL};
+        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    }
+}
+
+struct Printed {
+    value: i64,
+    at: Instant,
+}
+
+impl Printed {
+    fn get(&mut self, conn: &Connection) -> i64 {
+        if self.at.elapsed() > Duration::from_secs(5) {
+            self.value = dupes::printed(conn).map(|p| p.0).unwrap_or(self.value);
+            self.at = Instant::now();
+        }
+        self.value
+    }
 }
 
 fn workers() -> usize {
@@ -263,6 +285,7 @@ fn develop_batch(cache: &Path, jobs: &[(i64, PathBuf)]) -> Vec<Option<Developed>
             .iter()
             .map(|(id, path)| {
                 scope.spawn(move || {
+                    lower_priority();
                     #[cfg(windows)]
                     mf::start();
                     develop_files(cache, *id, path)
@@ -347,14 +370,16 @@ impl Learner {
             return false;
         }
         let Some(engine) = self.engine(cache) else { return false };
+        let mut stored = Vec::new();
         for id in &ids {
             let frames = hints::card_frames(cache, *id);
             let vector = engine.embed(&frames).ok().and_then(|vs| hints::mean(&vs));
             if hints::store(conn, *id, vector.as_deref()).is_ok() {
-                if let Ok(cards) = deck::cards(conn, &[*id]) {
-                    let _ = app.emit("develop://card", cards.first());
-                }
+                stored.push(*id);
             }
+        }
+        if let Ok(cards) = deck::cards(conn, &stored) {
+            let _ = app.emit("develop://cards", cards);
         }
         if let Some((pile, path)) = cold {
             let vector = read_frames(&path)
@@ -470,14 +495,20 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<Atomi
         if let Err(e) = tidy(&conn, &cache, db::now_ms()) {
             eprintln!("tidy: {e}");
         }
+        lower_priority();
         let mut last_emit = Instant::now() - Duration::from_secs(1);
         let mut was_busy = false;
         let mut learner = Learner::new();
         let mut printer = dupes::near::Printer::new();
         let mut dupes_at = Instant::now() - Duration::from_secs(60);
+        let mut printed = Printed { value: 0, at: Instant::now() - Duration::from_secs(60) };
+        let mut developed: Vec<i64> = Vec::new();
+        let mut series_dirty = false;
+        let mut series_at = Instant::now();
         loop {
             let is_paused = paused.load(Ordering::Relaxed);
-            if !is_paused && dupes_at.elapsed() > Duration::from_secs(3) {
+            let exact_every = Duration::from_secs(if was_busy { 30 } else { 3 });
+            if !is_paused && dupes_at.elapsed() > exact_every {
                 match dupes::refresh_exact(&conn) {
                     Ok(true) => {
                         let _ = app.emit("dupes://changed", ());
@@ -488,58 +519,70 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<Atomi
                 dupes_at = Instant::now();
             }
             let jobs = if is_paused { Vec::new() } else { next(&conn, workers()).unwrap_or_default() };
-            match jobs.is_empty() {
-                false => {
-                    was_busy = true;
-                    for ((id, path), result) in jobs.iter().zip(develop_batch(&cache, &jobs)) {
-                        if save(&conn, *id, path, result).is_ok() {
-                            if let Ok(cards) = deck::cards(&conn, &[*id]) {
-                                let card: Option<&CardView> = cards.first();
-                                let _ = app.emit("develop://card", card);
-                            }
+            let idle = jobs.is_empty();
+            if !idle {
+                was_busy = true;
+                let results = develop_batch(&cache, &jobs);
+                if let Ok(tx) = conn.unchecked_transaction() {
+                    for ((id, path), result) in jobs.iter().zip(results) {
+                        if save(&tx, *id, path, result).is_ok() {
+                            developed.push(*id);
                         }
                     }
-                    if jobs.iter().any(|(_, p)| deck::is_photo(p)) {
-                        let deck_path = db::get_setting(&conn, "deck_path").ok().flatten().unwrap_or_default();
-                        if crate::series::regroup(&conn, &deck_path).unwrap_or(false) {
-                            let _ = app.emit("deck://series", ());
-                        }
-                    }
-                    if last_emit.elapsed() > Duration::from_millis(250) {
-                        if let Ok(p) = progress(&conn, false) {
-                            let _ = app.emit("develop://progress", p);
-                        }
-                        last_emit = Instant::now();
-                    }
+                    let _ = tx.commit();
                 }
-                true => {
-                    if !is_paused && learner.step(&app, &conn, &cache) {
+                series_dirty |= jobs.iter().any(|(_, p)| deck::is_photo(p));
+            }
+            if series_dirty && (idle || series_at.elapsed() > Duration::from_secs(5)) {
+                let deck_path = db::get_setting(&conn, "deck_path").ok().flatten().unwrap_or_default();
+                if crate::series::regroup(&conn, &deck_path).unwrap_or(false) {
+                    let _ = app.emit("deck://series", ());
+                }
+                series_dirty = false;
+                series_at = Instant::now();
+            }
+            if !developed.is_empty() && (idle || last_emit.elapsed() > Duration::from_millis(250)) {
+                if let Ok(cards) = deck::cards(&conn, &developed) {
+                    let _ = app.emit("develop://cards", cards);
+                }
+                developed.clear();
+                if let Ok(p) = progress(&conn, false, printed.get(&conn)) {
+                    let _ = app.emit("develop://progress", p);
+                }
+                last_emit = Instant::now();
+            }
+            if !idle {
+                continue;
+            }
+            if !is_paused && learner.step(&app, &conn, &cache) {
+                continue;
+            }
+            if !is_paused {
+                match printer.step(&conn, learner.engine(&cache)) {
+                    Ok(Some(changed)) => {
+                        if changed {
+                            let _ = app.emit("dupes://changed", ());
+                        }
+                        if last_emit.elapsed() > Duration::from_millis(250) {
+                            if let Ok(p) = progress(&conn, false, printed.get(&conn)) {
+                                let _ = app.emit("develop://progress", p);
+                            }
+                            last_emit = Instant::now();
+                        }
                         continue;
                     }
-                    if !is_paused {
-                        match printer.step(&conn, learner.engine(&cache)) {
-                            Ok(Some(changed)) => {
-                                if changed {
-                                    let _ = app.emit("dupes://changed", ());
-                                }
-                                if let Ok(p) = progress(&conn, false) {
-                                    let _ = app.emit("develop://progress", p);
-                                }
-                                continue;
-                            }
-                            Ok(None) => {}
-                            Err(e) => eprintln!("dupes: {e}"),
-                        }
-                    }
-                    if was_busy || wake.swap(false, Ordering::Relaxed) {
-                        if let Ok(p) = progress(&conn, is_paused) {
-                            let _ = app.emit("develop://progress", p);
-                        }
-                        was_busy = false;
-                    }
-                    std::thread::sleep(Duration::from_millis(400));
+                    Ok(None) => {}
+                    Err(e) => eprintln!("dupes: {e}"),
                 }
             }
+            if was_busy || wake.swap(false, Ordering::Relaxed) {
+                printed.at = Instant::now() - Duration::from_secs(60);
+                if let Ok(p) = progress(&conn, is_paused, printed.get(&conn)) {
+                    let _ = app.emit("develop://progress", p);
+                }
+                was_busy = false;
+            }
+            std::thread::sleep(Duration::from_millis(400));
         }
     });
 }

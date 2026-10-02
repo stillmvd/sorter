@@ -1,6 +1,6 @@
 import { Film } from "lucide-react";
 import { useEffect, useState } from "react";
-import { frameSrc, ipc, onCard, onProgress, type AppState, type Card } from "../../lib/ipc";
+import { frameSrc, ipc, mergeCards, onCards, onProgress, type AppState, type Card } from "../../lib/ipc";
 import { FRAMES } from "../deck/FilmStrip";
 import { Button } from "../ui/Button";
 import { Heading, PageHeader, Tag } from "../ui/PageHeader";
@@ -33,7 +33,7 @@ export function Develop({ state, onDone }: { state: AppState; onDone: () => void
 
   useEffect(() => {
     void ipc.deckWindow(0, 14).then(setCards);
-    const a = onCard((card) => setCards((cs) => cs.map((c) => (c.id === card.id ? card : c))));
+    const a = onCards((fresh) => setCards((cs) => mergeCards(cs, fresh)));
     const b = onProgress(setProgress);
     return () => {
       void a.then((f) => f());

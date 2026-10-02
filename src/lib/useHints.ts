@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ipc, onCard, onHintsChanged, type Hints } from "./ipc";
+import { ipc, onCards, onHintsChanged, type Hints } from "./ipc";
 
 const EMPTY: Hints = { enabled: false, ready: false, examples: 0, hints: [] };
 
@@ -23,7 +23,7 @@ export function useHints(ids: number[], version: unknown): Hints {
     };
     load();
     const wanted = new Set(key.split(",").map(Number));
-    const offCard = onCard((c) => wanted.has(c.id) && soon());
+    const offCard = onCards((cs) => cs.some((c) => wanted.has(c.id)) && soon());
     const offChanged = onHintsChanged(soon);
     return () => {
       alive = false;
