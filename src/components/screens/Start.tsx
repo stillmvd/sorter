@@ -42,6 +42,7 @@ function Step({
 export function Start({ state, onChange, onStart }: { state: AppState; onChange: () => void; onStart: () => void }) {
   const [deckInfo, setDeckInfo] = useState<{ count: number; bytes: number } | null>(null);
   const [errors, setErrors] = useState<{ deck?: string; table?: string }>({});
+  const [reading, setReading] = useState<string | null>(null);
   const deck = state.settings.deck_path;
   const table = state.settings.table_path;
   const hints = state.settings.hints_enabled !== "0";
@@ -52,12 +53,16 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
     const path = await open({ directory: true, title: which === "deck" ? "Где лежат видео?" : "Куда раскладывать?" });
     if (typeof path !== "string") return;
     try {
-      if (which === "deck") setDeckInfo(await ipc.chooseDeck(path));
-      else await ipc.chooseTable(path);
+      if (which === "deck") {
+        setReading(path);
+        setDeckInfo(await ipc.chooseDeck(path));
+      } else await ipc.chooseTable(path);
       setErrors((e) => ({ ...e, [which]: undefined }));
       onChange();
     } catch (e) {
       setErrors((x) => ({ ...x, [which]: errorText(e) }));
+    } finally {
+      setReading(null);
     }
   };
 
@@ -76,8 +81,8 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
             n={1}
             done={!!deck}
             title="Откуда брать видео"
-            value={deck ?? "Папка не выбрана"}
-            note={deck ? `Колода — ${count} ${plural(count, "видео", "видео", "видео")}${deckInfo ? ` · ${gb(deckInfo.bytes)}` : ""}. Берутся только видео в самой папке, вложенные не трогаю.` : "Колода — папка с неразобранными видео."}
+            value={reading ?? deck ?? "Папка не выбрана"}
+            note={reading ? "Читаю папку…" : deck ? `Колода — ${count} ${plural(count, "видео", "видео", "видео")}${deckInfo ? ` · ${gb(deckInfo.bytes)}` : ""}. Берутся только видео в самой папке, вложенные не трогаю.` : "Колода — папка с неразобранными видео."}
             error={errors.deck}
             action={
               <Button variant={deck ? "secondary" : "primary"} onClick={() => pick("deck")}>

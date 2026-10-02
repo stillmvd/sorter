@@ -160,20 +160,29 @@ pub fn sync(conn: &Connection, deck: &str) -> AppResult<SyncResult> {
         .map(|p| p.map(|p| p.to_lowercase()))
         .collect::<Result<_, _>>()?;
     let present: HashMap<String, ()> = files.iter().map(|f| (f.0.to_lowercase(), ())).collect();
+    let tx = conn.unchecked_transaction()?;
     let mut gone = Vec::new();
     for (name, (id, _, _)) in &rows {
         if !present.contains_key(name) {
-            conn.execute("UPDATE card SET status = 'gone' WHERE id = ?1", params![id])?;
+            tx.execute("UPDATE card SET status = 'gone' WHERE id = ?1", params![id])?;
             gone.push(*id);
         }
     }
 
+    let mut position: f64 = tx.query_row(
+        "SELECT COALESCE(MAX(position), 0) FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred')",
+        params![deck],
+        |r| r.get(0),
+    )?;
+    let mut insert = tx.prepare(
+        "INSERT INTO card(deck_path, file_name, size, mtime, taken_at, taken_from, kind, position) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+    )?;
     let mut added = Vec::new();
     let mut pending = false;
     for (name, size, mtime) in files {
         match rows.get(&name.to_lowercase()) {
             Some((id, s, m)) if (*s, *m) != (size, mtime) => {
-                conn.execute(
+                tx.execute(
                     "UPDATE card SET size = ?2, mtime = ?3, stage = 'new', frames = 0, error = NULL WHERE id = ?1",
                     params![id, size, mtime],
                 )?;
@@ -182,24 +191,23 @@ pub fn sync(conn: &Connection, deck: &str) -> AppResult<SyncResult> {
             None if !ready(&dir.join(&name)) || busy.contains(&dir.join(&name).to_string_lossy().to_lowercase()) => pending = true,
             None => {
                 let named = taken_from_name(&name);
-                conn.execute(
-                    "INSERT INTO card(deck_path, file_name, size, mtime, taken_at, taken_from, kind, position)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7,
-                       (SELECT COALESCE(MAX(position), 0) + 1 FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred')))",
-                    params![
-                        deck,
-                        name,
-                        size,
-                        mtime,
-                        named.unwrap_or(mtime),
-                        if named.is_some() { "name" } else { "file" },
-                        if photo_name(&name) { "photo" } else { "video" }
-                    ],
-                )?;
-                added.push(conn.last_insert_rowid());
+                position += 1.0;
+                insert.execute(params![
+                    deck,
+                    name,
+                    size,
+                    mtime,
+                    named.unwrap_or(mtime),
+                    if named.is_some() { "name" } else { "file" },
+                    if photo_name(&name) { "photo" } else { "video" },
+                    position
+                ])?;
+                added.push(tx.last_insert_rowid());
             }
         }
     }
+    drop(insert);
+    tx.commit()?;
     Ok(SyncResult { added, gone, pending })
 }
 
@@ -269,6 +277,23 @@ mod tests {
     use super::*;
     use crate::db;
     use tempfile::TempDir;
+
+    #[test]
+    #[ignore]
+    fn bench_big_deck() {
+        let deck = r"G:\sorter-test\big";
+        let t = std::time::Instant::now();
+        let n = fs::read_dir(deck).unwrap().filter_map(|e| e.ok()).filter_map(|e| e.metadata().ok()).count();
+        println!("read_dir+meta {n}: {:?}", t.elapsed());
+        let t = std::time::Instant::now();
+        let r = fs::read_dir(deck).unwrap().filter_map(|e| e.ok()).filter(|e| ready(&e.path())).count();
+        println!("ready {r}: {:?}", t.elapsed());
+        let dir = TempDir::new().unwrap();
+        let conn = db::open(&dir.path().join("t.db")).unwrap();
+        let t = std::time::Instant::now();
+        let s = sync(&conn, deck).unwrap();
+        println!("sync {}: {:?}", s.added.len(), t.elapsed());
+    }
 
     #[test]
     fn dates_from_names() {

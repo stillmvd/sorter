@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Titlebar } from "./components/Titlebar";
 import { DeckScreen } from "./components/deck/DeckScreen";
 import { ExplorerBar } from "./components/deck/ExplorerBar";
@@ -39,7 +39,6 @@ export default function App() {
       } catch (e) {
         setExplorer({ path, error: errorText(e) });
       }
-      setDevelopView(false);
       setScreen("deck");
       await reload();
     },
@@ -73,6 +72,17 @@ export default function App() {
     if (theme === "dark" || theme === "light") document.documentElement.dataset.theme = theme;
     else delete document.documentElement.dataset.theme;
   }, [state?.settings.theme]);
+
+  const lastDeck = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const deck = state?.settings.deck_path;
+    if (!state || !deck) return;
+    if (lastDeck.current !== undefined && lastDeck.current !== deck && state.developing.done < state.developing.total) {
+      setDevelopView(true);
+      setScreen("deck");
+    }
+    lastDeck.current = deck;
+  }, [state]);
 
   const back = useCallback(() => void reload().then(() => setScreen("deck")), [reload]);
 

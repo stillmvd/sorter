@@ -16,6 +16,7 @@ use crate::series::{self, SeriesView};
 
 pub struct AppState {
     pub db: Mutex<Connection>,
+    pub reader: Mutex<Connection>,
     pub data_dir: PathBuf,
     pub paused: Arc<AtomicBool>,
     pub wake: Arc<AtomicBool>,
@@ -31,8 +32,12 @@ impl AppState {
         self.db.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    pub fn read(&self) -> MutexGuard<'_, Connection> {
+        self.reader.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     pub fn roots(&self) -> Vec<PathBuf> {
-        let conn = self.conn();
+        let conn = self.read();
         let mut roots = vec![self.data_dir.join("cache")];
         for key in ["deck_path", "table_path"] {
             if let Ok(Some(p)) = get_setting(&conn, key) {
@@ -117,13 +122,10 @@ fn snapshot(conn: &Connection, state: &AppState) -> AppResult<StateView> {
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_state(state: State<AppState>) -> AppResult<StateView> {
-    let conn = state.conn();
-    if let Ok((d, t)) = paths(&conn) {
-        if Path::new(&d).is_dir() {
-            deck::sync(&conn, &d)?;
-        }
+    let conn = state.read();
+    if let Ok((_, t)) = paths(&conn) {
         if Path::new(&t).is_dir() {
             piles::sync(&conn, &t)?;
         }
@@ -161,7 +163,7 @@ pub struct Chosen {
     bytes: i64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn choose_deck(state: State<AppState>, path: String) -> AppResult<Chosen> {
     let conn = state.conn();
     choose(&conn, "deck_path", "table_path", &path)?;
@@ -205,9 +207,9 @@ pub fn folder_arg<I: IntoIterator<Item = String>>(args: I) -> Option<String> {
     Path::new(&path).is_dir().then_some(path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn deck_window(state: State<AppState>, from: i64, count: i64, kind: Option<String>) -> AppResult<Vec<CardView>> {
-    let conn = state.conn();
+    let conn = state.read();
     let (d, _) = paths(&conn)?;
     let kind = kind.filter(|k| k == "video" || k == "photo").unwrap_or_else(|| "all".into());
     deck::window(&conn, &d, from, count, &kind)
@@ -293,14 +295,14 @@ pub fn undo_since(app: AppHandle, state: State<AppState>, since: i64) -> AppResu
     Ok(UndoneMany { undone, failed })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn hints(state: State<AppState>, card_ids: Vec<i64>) -> AppResult<hints::HintsView> {
-    Ok(hints::suggest(&state.conn(), &card_ids)?)
+    Ok(hints::suggest(&state.read(), &card_ids)?)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn journal(state: State<AppState>, before: Option<i64>, limit: i64) -> AppResult<Vec<MoveView>> {
-    let conn = state.conn();
+    let conn = state.read();
     let ids: Vec<i64> = conn
         .prepare("SELECT id FROM move WHERE id < ?1 ORDER BY id DESC LIMIT ?2")?
         .query_map(params![before.unwrap_or(i64::MAX), limit], |r| r.get(0))?
@@ -316,9 +318,9 @@ pub struct JournalStats {
     hinted: i64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn journal_stats(state: State<AppState>) -> AppResult<JournalStats> {
-    let conn = state.conn();
+    let conn = state.read();
     let (moves, cards, hinted) = conn.query_row(
         "SELECT COUNT(DISTINCT m.id),
                 COUNT(i.card_id),
@@ -338,7 +340,7 @@ pub struct CacheInfo {
     cards: usize,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn cache_info(state: State<AppState>) -> CacheInfo {
     let (bytes, cards) = crate::develop::cache_size(&state.data_dir.join("cache"));
     CacheInfo { bytes, cards }
@@ -390,9 +392,9 @@ pub fn remove_pile(state: State<AppState>, pile_id: i64) -> AppResult<Vec<PileVi
     piles::list(&conn, &t)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dupes_for(state: State<AppState>, card_id: i64) -> AppResult<Vec<DupeView>> {
-    dupes::dupes_for(&state.conn(), card_id)
+    dupes::dupes_for(&state.read(), card_id)
 }
 
 #[tauri::command]
@@ -420,9 +422,9 @@ pub fn replace_copy(app: AppHandle, state: State<AppState>, card_id: i64, worse_
     Ok(Placed { mv, piles: piles::list(&conn, &t)? })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn deck_series(state: State<AppState>) -> AppResult<Vec<SeriesView>> {
-    let conn = state.conn();
+    let conn = state.read();
     let (d, _) = paths(&conn)?;
     series::list(&conn, &d)
 }
@@ -454,15 +456,15 @@ pub fn split_series(app: AppHandle, state: State<AppState>, series_id: i64) -> A
     deck::cards(&conn, &ids)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dupe_groups(state: State<AppState>) -> AppResult<dupes::Groups> {
-    dupes::groups(&state.conn())
+    dupes::groups(&state.read())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn playable(state: State<AppState>, card_id: i64) -> AppResult<String> {
     let path = {
-        let conn = state.conn();
+        let conn = state.read();
         deck::cards(&conn, &[card_id])?.into_iter().next().map(|c| c.path)
     }
     .ok_or_else(|| AppError::new("NO_CARD", "Этой карты уже нет в колоде — её файл убрали. Колода обновится сама."))?;

@@ -22,6 +22,7 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, wake: Arc<AtomicBool>) {
     std::thread::spawn(move || {
         let Ok(conn) = db::open(&db_path) else { return };
         let (tx, rx) = mpsc::channel::<()>();
+        let _ = tx.send(());
         let mut watched: (Option<String>, Option<String>) = (None, None);
         let mut _debouncer = None;
         let mut retry = false;
