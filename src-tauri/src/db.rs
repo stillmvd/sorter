@@ -165,6 +165,14 @@ pub fn init(conn: &Connection) -> rusqlite::Result<()> {
              COMMIT;",
         )?;
     }
+    if get_setting(conn, "redeveloped_fragmented")?.is_none() {
+        conn.execute(
+            "UPDATE card SET stage = CASE WHEN status IN ('in_deck','deferred') THEN 'new' ELSE 'meta' END, frames = 0
+             WHERE kind = 'video' AND duration_ms = 0 AND stage IN ('frames','embedded')",
+            [],
+        )?;
+        set_setting(conn, "redeveloped_fragmented", "1")?;
+    }
     conn.execute(
         "INSERT OR IGNORE INTO settings(key, value) VALUES ('schema_version', ?1)",
         params![SCHEMA_VERSION.to_string()],

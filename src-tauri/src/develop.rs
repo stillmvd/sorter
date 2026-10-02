@@ -87,24 +87,29 @@ mod mf {
                 .GetPresentationAttribute(MF_SOURCE_READER_MEDIASOURCE.0 as u32, &MF_PD_DURATION)
                 .ok()
                 .and_then(|v| u64::try_from(&v).ok())
-                .unwrap_or(0) as i64;
+                .filter(|d| *d > 0)
+                .map(|d| d as i64)
+                .or_else(|| super::fragmented_duration(path))
+                .unwrap_or(0);
 
             let mut frames = Vec::new();
+            let mut seek = true;
             for i in 0..FRAMES {
+                let at = duration * (2 * i as i64 + 1) / (2 * FRAMES as i64);
                 if duration > 0 {
-                    let at = duration * (2 * i as i64 + 1) / (2 * FRAMES as i64);
-                    let pos = PROPVARIANT::from(at);
-                    if reader.SetCurrentPosition(&GUID::zeroed(), &pos).is_err() {
-                        break;
+                    if seek && reader.SetCurrentPosition(&GUID::zeroed(), &PROPVARIANT::from(at)).is_err() {
+                        seek = false;
                     }
                 } else if i > 0 {
                     break;
                 }
                 let mut sample = None;
                 let mut flags = 0u32;
-                for _ in 0..30 {
-                    reader.ReadSample(VIDEO, 0, None, Some(&mut flags), None, Some(&mut sample))?;
-                    if sample.is_some() || flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+                let mut ts = 0i64;
+                for _ in 0..if seek { 30 } else { 100_000 } {
+                    sample = None;
+                    reader.ReadSample(VIDEO, 0, None, Some(&mut flags), Some(&mut ts), Some(&mut sample))?;
+                    if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 || (sample.is_some() && (seek || ts >= at)) {
                         break;
                     }
                 }
@@ -133,6 +138,45 @@ mod mf {
             Ok(Meta { duration_ms: duration / 10_000, width, height, frames })
         }
     }
+}
+
+fn fragmented_duration(path: &Path) -> Option<i64> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = fs::File::open(path).ok()?;
+    let end = f.metadata().ok()?.len();
+    let mut tracks: std::collections::HashMap<u32, f64> = std::collections::HashMap::new();
+    let mut pos = 0u64;
+    let mut head = [0u8; 16];
+    while pos + 8 <= end {
+        f.seek(SeekFrom::Start(pos)).ok()?;
+        f.read_exact(&mut head[..8]).ok()?;
+        let mut size = u32::from_be_bytes(head[..4].try_into().ok()?) as u64;
+        let kind: [u8; 4] = head[4..8].try_into().ok()?;
+        let mut at = 8;
+        if size == 1 {
+            f.read_exact(&mut head[8..16]).ok()?;
+            size = u64::from_be_bytes(head[8..16].try_into().ok()?);
+            at = 16;
+        } else if size == 0 {
+            size = end - pos;
+        }
+        if size < at {
+            break;
+        }
+        if &kind == b"sidx" && size <= 1 << 20 {
+            let mut body = vec![0u8; (size - at) as usize];
+            f.read_exact(&mut body).ok()?;
+            let u32_at = |o: usize| body.get(o..o + 4).map(|b| u32::from_be_bytes(b.try_into().unwrap()));
+            let track = u32_at(4)?;
+            let scale = u32_at(8)?.max(1) as f64;
+            let refs_at = if body[0] == 0 { 20 } else { 28 };
+            let count = body.get(refs_at + 2..refs_at + 4).map(|b| u16::from_be_bytes([b[0], b[1]]))? as usize;
+            let total: u64 = (0..count).filter_map(|k| u32_at(refs_at + 4 + k * 12 + 4)).map(u64::from).sum();
+            *tracks.entry(track).or_default() += total as f64 / scale;
+        }
+        pos += size;
+    }
+    tracks.values().cloned().fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.max(v)))).filter(|s| *s > 0.0).map(|s| (s * 1e7) as i64)
 }
 
 pub fn orientation(w: u32, h: u32) -> &'static str {
@@ -515,6 +559,21 @@ mod tests {
         assert!(meta.duration_ms > 0);
         assert_eq!(meta.frames.len(), FRAMES as usize);
         assert!(meta.width > 0 && meta.height > 0);
+    }
+
+    #[test]
+    fn reads_fragmented_mp4_if_present() {
+        let path = Path::new(r"G:\sorter-test\small-60\17367477074721.mp4");
+        if !path.exists() {
+            return;
+        }
+        let secs = fragmented_duration(path).unwrap() / 10_000_000;
+        assert!((14..=16).contains(&secs), "{secs}");
+        mf::start();
+        let meta = mf::read(path).unwrap();
+        assert_eq!(meta.duration_ms / 1000, secs);
+        assert_eq!(meta.frames.len(), FRAMES as usize);
+        assert_ne!(meta.frames[0].as_raw(), meta.frames[7].as_raw());
     }
 
     #[test]

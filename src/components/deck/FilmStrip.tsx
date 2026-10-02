@@ -15,7 +15,7 @@ function topVideo() {
 
 export function seekFrame(card: Card, step: number) {
   const v = topVideo();
-  const d = card.durationMs ?? (v?.duration ?? 0) * 1000;
+  const d = card.durationMs || (v && Number.isFinite(v.duration) ? v.duration * 1000 : 0);
   if (!v || !d) return;
   const now = Math.min(FRAMES - 1, Math.floor(((v.currentTime * 1000) / d) * FRAMES));
   const next = Math.max(0, Math.min(FRAMES - 1, now + step));
@@ -39,7 +39,7 @@ export function FilmStrip({ card, cacheDir }: { card: Card; cacheDir: string }) 
     const v = topVideo();
     if (!v) return;
     const update = () => {
-      const d = card.durationMs ?? v.duration * 1000;
+      const d = card.durationMs || (Number.isFinite(v.duration) ? v.duration * 1000 : 0);
       if (d) setActive(Math.min(FRAMES - 1, Math.floor(((v.currentTime * 1000) / d) * FRAMES)));
     };
     v.addEventListener("timeupdate", update);
