@@ -133,6 +133,7 @@ pub fn init(conn: &Connection) -> rusqlite::Result<()> {
         )?;
     }
     conn.execute("CREATE INDEX IF NOT EXISTS card_series ON card(series_id) WHERE series_id IS NOT NULL", [])?;
+    conn.execute("CREATE INDEX IF NOT EXISTS card_name ON card(deck_path, file_name)", [])?;
     let print_look: bool = conn.prepare("SELECT 1 FROM pragma_table_info('fingerprint') WHERE name = 'look'")?.exists([])?;
     if !print_look {
         conn.execute("ALTER TABLE fingerprint ADD COLUMN look BLOB", [])?;

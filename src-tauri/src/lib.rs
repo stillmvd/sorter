@@ -71,8 +71,7 @@ pub fn run() {
             develop::spawn(app.handle().clone(), data_dir.join("sorter.db"), data_dir.join("cache"), paused.clone(), wake.clone());
             watch::spawn(app.handle().clone(), data_dir.join("sorter.db"), wake.clone());
             let incoming = Mutex::new(commands::folder_arg(std::env::args()));
-            let reader = db::open(&data_dir.join("sorter.db"))?;
-            app.manage(AppState { db: Mutex::new(conn), reader: Mutex::new(reader), data_dir, paused, wake, incoming });
+            app.manage(AppState { db: Mutex::new(conn), db_path: data_dir.join("sorter.db"), data_dir, paused, wake, incoming });
             app.manage(updates::Updates::default());
             updates::init(app.handle());
             if let Some(window) = app.get_webview_window("main") {

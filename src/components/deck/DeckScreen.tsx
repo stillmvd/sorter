@@ -1,5 +1,5 @@
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Copy, Folder, FolderOpen, History, Image as ImageIcon, LayoutGrid, Layers, Plus, Settings, Video } from "lucide-react";
+import { Copy, Folder, FolderOpen, History, Image as ImageIcon, LayoutGrid, Layers, Loader2, Plus, Settings, Video } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { errorText, ipc, mergeCards, onCards, onDeckChanged, onDupesChanged, onPilesChanged, onProgress, onSeries, type AppState, type Card, type DupeGroup, type DupeGroups, type DupeView, type GroupItem, type Kind, type Method, type Move, type Pile, type SeriesView } from "../../lib/ipc";
 import { SeriesPanel, seriesSpan, type Rest } from "./SeriesPanel";
@@ -902,6 +902,14 @@ export function DeckScreen({
       ) : (
         <div ref={center} className="flex min-h-0 flex-1 items-stretch gap-12">
           <LastMove move={last} onUndo={undo} />
+          {!loaded && (
+            <div className="flex flex-1 items-center justify-center">
+              <div className="flex aspect-[0.62] h-[min(64vh,520px)] flex-col items-center justify-center gap-3 rounded-[28px] border border-line bg-film text-[13px] font-medium text-[#a2a2a9]">
+                <Loader2 className="h-6 w-6 animate-spin" strokeWidth={1.5} />
+                Достаю карты из колоды…
+              </div>
+            </div>
+          )}
           {current && (
             <CardStack
               cards={shownCards}
