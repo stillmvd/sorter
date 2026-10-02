@@ -53,7 +53,7 @@ export function SettingsScreen({ state, onChange, onBack }: { state: AppState; o
   }, [onBack]);
 
   const theme = (state.settings.theme as Theme | undefined) ?? "system";
-  const hints = state.settings.hints_enabled !== "0";
+  const hints = state.settings.hints_enabled === "1";
   const piles = state.piles.filter((p) => !p.isTrash);
   const examples = piles.reduce((n, p) => n + p.examples, 0);
 

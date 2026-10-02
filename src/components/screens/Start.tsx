@@ -45,7 +45,7 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
   const [reading, setReading] = useState<string | null>(null);
   const deck = state.settings.deck_path;
   const table = state.settings.table_path;
-  const hints = state.settings.hints_enabled !== "0";
+  const hints = state.settings.hints_enabled === "1";
   const piles = state.piles.filter((p) => !p.isTrash).length;
   const count = deckInfo?.count ?? state.deck.left;
 

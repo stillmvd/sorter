@@ -151,7 +151,7 @@ pub fn from_blob(b: &[u8]) -> Vec<f32> {
 }
 
 pub fn enabled(conn: &Connection) -> bool {
-    db::get_setting(conn, "hints_enabled").ok().flatten().as_deref() != Some("0")
+    db::get_setting(conn, "hints_enabled").ok().flatten().as_deref() == Some("1")
 }
 
 pub fn card_frames(cache: &Path, id: i64) -> Vec<RgbImage> {
@@ -329,6 +329,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         db::init(&conn).unwrap();
         db::set_setting(&conn, "table_path", "T").unwrap();
+        db::set_setting(&conn, "hints_enabled", "1").unwrap();
         conn.execute_batch(
             "INSERT INTO pile(id, table_path, name, ord) VALUES (1, 'T', 'Кошки', 0), (2, 'T', 'Машины', 1), (4, 'T', 'Мало', 3);
              INSERT INTO pile(id, table_path, name, ord, is_trash) VALUES (3, 'T', ':trash', 2, 1);

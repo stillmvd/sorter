@@ -812,7 +812,7 @@ export function DeckScreen({
           piles={piles}
           deckPath={initial.settings.deck_path ?? ""}
           tablePath={initial.settings.table_path ?? ""}
-          hintsOn={initial.settings.hints_enabled !== "0"}
+          hintsOn={initial.settings.hints_enabled === "1"}
           onJournal={onJournal}
           rest={
             other && restLeft > 0
