@@ -131,19 +131,33 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
         <div className="flex-1" />
         <div className="flex items-center gap-3">
           <Button variant="primary" size={48} disabled={!deck || !table} onClick={onStart}>
-            Проявить плёнку
+            Разобрать колоду
           </Button>
           {(!deck || !table) && <span className="text-[13px] text-dim">Сначала выбери {deck ? "стол" : "колоду"}</span>}
         </div>
       </section>
       <aside className="flex w-[480px] shrink-0 flex-col items-center justify-center gap-9 rounded-[28px] bg-cosmic">
         <div className="relative h-[330px] w-[220px]">
-          <div className="absolute inset-0 translate-x-[-22px] translate-y-2 -rotate-9 rounded-[28px] bg-line" />
-          <div className="absolute inset-0 translate-x-[18px] translate-y-0.5 rotate-5 rounded-[28px] bg-strong" />
-          <div className="absolute inset-0 flex flex-col justify-between rounded-[28px] border border-line bg-film p-5 text-[#ececef] shadow-[0_24px_60px_rgb(0_0_0/30%)]">
-            <div className="text-[13px] font-medium text-[#a2a2a9]">колода</div>
-            <div className="text-[88px] leading-[0.9] font-bold tracking-[-0.04em]">{deck ? count : "—"}</div>
-            <div className="text-[13px] font-medium text-[#a2a2a9]">{deck ? plural(count, "карта", "карты", "карт") : "выбери папку"}</div>
+          <div className={`absolute inset-0 translate-x-[-22px] translate-y-2 -rotate-9 rounded-[28px] bg-line ${deck ? "" : "deck-breathe-back"}`} />
+          <div className={`absolute inset-0 translate-x-[18px] translate-y-0.5 rotate-5 rounded-[28px] bg-strong ${deck ? "" : "deck-breathe-mid"}`} />
+          <div className="absolute inset-0 flex flex-col justify-between overflow-hidden rounded-[28px] border border-line bg-film p-5 text-[#ececef] shadow-[0_24px_60px_rgb(0_0_0/30%)]">
+            <div className="relative z-1 text-[13px] font-medium text-[#a2a2a9]">колода</div>
+            {deck ? (
+              <div className="text-[88px] leading-[0.9] font-bold tracking-[-0.04em]">{count}</div>
+            ) : (
+              <div className="pointer-events-none absolute inset-0 grid place-items-center" aria-hidden="true">
+                <div className="film-roll">
+                  <div className="film-belt">
+                    {Array.from({ length: 6 }, (_, i) => (
+                      <span key={i}>
+                        <i />
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+            <div className="relative z-1 text-[13px] font-medium text-[#a2a2a9]">{deck ? plural(count, "карта", "карты", "карт") : "выбери папку"}</div>
           </div>
         </div>
         <p className="m-0 max-w-[300px] text-center text-[13px] leading-normal text-dim">
