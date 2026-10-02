@@ -17,8 +17,8 @@ function Strip({ card, cacheDir, no }: { card: Card; cacheDir: string; no: numbe
         <span>{state}</span>
       </div>
       <div className="flex gap-1">
-        {Array.from({ length: FRAMES }, (_, i) => (
-          <div key={i} className={`h-11 min-w-0 flex-1 overflow-hidden rounded-[3px] ${ready && i < card.frames ? "bg-[#2b2b30]" : "border border-dashed border-[#2a2a2f]"}`}>
+        {Array.from({ length: card.kind === "photo" ? 1 : FRAMES }, (_, i) => (
+          <div key={i} className={`h-11 min-w-0 overflow-hidden ${card.kind === "photo" ? "w-[calc((100%-28px)/8)]" : "flex-1"} rounded-[3px] ${ready && i < card.frames ? "bg-[#2b2b30]" : "border border-dashed border-[#2a2a2f]"}`}>
             {ready && i < card.frames && <img src={frameSrc(cacheDir, card, i)} alt="" className="h-full w-full object-cover" />}
           </div>
         ))}
@@ -44,7 +44,7 @@ export function Develop({ state, onDone }: { state: AppState; onDone: () => void
   const pct = progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
   const finished = progress.total > 0 && progress.done >= progress.total;
   const jobs = [
-    { name: "Раскадровки", val: `${progress.done} / ${progress.total}`, pct, hint: "По 8 кадров с каждого видео. Хранятся у Sorter, папку с видео не трогаю." },
+    { name: "Раскадровки", val: `${progress.done} / ${progress.total}`, pct, hint: "По 8 кадров с каждого видео, у фото — один. Хранятся у Sorter, папку не трогаю." },
     { name: "Сведения о файлах", val: `${progress.done} / ${progress.total}`, pct, hint: "Длина, размер кадра и ориентация — чтобы карта сразу встала как надо." },
     { name: "Подсказки", val: "позже", pct: 0, hint: "Начнут угадывать стопку, когда ты разложишь первые карты." },
   ];

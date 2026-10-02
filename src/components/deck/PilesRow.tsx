@@ -1,4 +1,4 @@
-import { Image, Trash2, Video } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import type { Pile } from "../../lib/ipc";
 
 function stack(count: number) {
@@ -46,21 +46,7 @@ export function PilesRow({
           >
             <span className="flex items-center justify-between gap-1">
               <span className="text-base font-bold">{p.key === "Delete" ? "Del" : (p.key ?? "·")}</span>
-              <span className="flex items-center gap-1.5 text-[11px] font-medium opacity-75">
-                {p.videos > 0 && (
-                  <span className="flex items-center gap-0.5" title={`Видео: ${p.videos}`}>
-                    <Video className="h-[11px] w-[11px]" strokeWidth={2} />
-                    {p.videos}
-                  </span>
-                )}
-                {p.photos > 0 && (
-                  <span className="flex items-center gap-0.5" title={`Фото: ${p.photos}`}>
-                    <Image className="h-[11px] w-[11px]" strokeWidth={2} />
-                    {p.photos}
-                  </span>
-                )}
-                {p.count === 0 && "0"}
-              </span>
+              <span className="text-[11px] font-medium opacity-75">{p.count}</span>
             </span>
             <span className={`flex items-center gap-1.5 truncate text-[13px] ${lit ? "font-bold" : "font-medium"}`}>
               {p.isTrash && <Trash2 className="h-3.5 w-3.5 shrink-0" strokeWidth={1.5} />}

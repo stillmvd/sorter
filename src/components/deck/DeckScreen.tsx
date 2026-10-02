@@ -1,5 +1,5 @@
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Copy, Folder, FolderOpen, History, LayoutGrid, Layers, Plus, Settings } from "lucide-react";
+import { Copy, Folder, FolderOpen, History, Image as ImageIcon, LayoutGrid, Layers, Plus, Settings, Video } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { errorText, ipc, onCard, onDeckChanged, onDupesChanged, onPilesChanged, onProgress, onSeries, type AppState, type Card, type DupeGroup, type DupeGroups, type DupeView, type GroupItem, type Kind, type Method, type Move, type Pile, type SeriesView } from "../../lib/ipc";
 import { SeriesPanel, seriesSpan, type Rest } from "./SeriesPanel";
@@ -931,6 +931,9 @@ export function DeckScreen({
               <div className="flex flex-col gap-1">
                 <div className="flex min-w-0 items-center gap-2">
                   <div className="truncate text-lg font-bold">{(focusCard ?? current).fileName}</div>
+                  <Tag icon={(focusCard ?? current).kind === "photo" ? <ImageIcon strokeWidth={1.5} /> : <Video strokeWidth={1.5} />}>
+                    {(focusCard ?? current).kind === "photo" ? "Фото" : "Видео"} · {(focusCard ?? current).fileName.split(".").pop()?.toUpperCase()}
+                  </Tag>
                   <button
                     type="button"
                     aria-label="Показать в проводнике"

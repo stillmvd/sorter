@@ -33,8 +33,6 @@ export type Pile = {
   key: string | null;
   isTrash: boolean;
   count: number;
-  videos: number;
-  photos: number;
   examples: number;
 };
 
