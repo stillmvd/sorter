@@ -119,7 +119,19 @@ export type Settings = Partial<
 
 export type KindCounts = { left: number; placed: number };
 
-export type Developing = { done: number; total: number; paused: boolean; printed: number };
+export type Developing = {
+  done: number;
+  total: number;
+  paused: boolean;
+  printed: number;
+  prints: number;
+  hints: boolean;
+  embedded: number;
+  stage: "frames" | "dupes" | "hints" | "done";
+  speed: number;
+  ready: boolean;
+  pair: { name: string; card: Card | null }[] | null;
+};
 
 export type AppState = {
   cacheDir: string;
@@ -178,6 +190,7 @@ export const ipc = {
   updateCheck: () => invoke<UpdateState>("update_check"),
   updateInstall: () => invoke<void>("update_install"),
   chooseDeck: (path: string) => invoke<{ count: number; bytes: number }>("choose_deck", { path }),
+  cancelDeck: () => invoke<void>("cancel_deck"),
   chooseTable: (path: string) => invoke<Pile[]>("choose_table", { path }),
   setSetting: (key: string, value: string) => invoke<void>("set_setting_cmd", { key, value }),
   deckWindow: (from: number, count: number, kind: Kind = "all") => invoke<Card[]>("deck_window", { from, count, kind }),

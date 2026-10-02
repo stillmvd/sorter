@@ -199,11 +199,12 @@ pub struct Printer {
     index: Option<Index>,
     version: i64,
     idle_until: Option<Instant>,
+    pub last: Option<(String, Option<String>)>,
 }
 
 impl Printer {
     pub fn new() -> Self {
-        Printer { index: None, version: -1, idle_until: None }
+        Printer { index: None, version: -1, idle_until: None, last: None }
     }
 
     pub fn step(&mut self, conn: &Connection, engine: Option<&mut Engine>) -> rusqlite::Result<Option<bool>> {
@@ -215,8 +216,13 @@ impl Printer {
             return Ok(None);
         };
         self.idle_until = None;
+        self.last = Some((file.path.clone(), None));
+        let deck = crate::db::get_setting(conn, "deck_path")?;
         let print = print::print(Path::new(&file.path));
         let vectors = print.as_ref().map(|p| embed(engine, p)).unwrap_or_default();
+        if crate::db::get_setting(conn, "deck_path")? != deck {
+            return Ok(Some(false));
+        }
         save_print(conn, &file, print.as_ref(), &vectors)?;
         let Some(p) = print else { return Ok(Some(false)) };
         let version: i64 = conn.query_row("PRAGMA data_version", [], |r| r.get(0))?;
@@ -244,6 +250,7 @@ impl Printer {
             }
             if let Some(pair) = compare(conn, &me, other, &audio_set)? {
                 if pair.confidence >= STORE_MIN {
+                    self.last = Some((me.path.clone(), Some(other.path.clone())));
                     changed |= store_pair(conn, &me.path, &other.path, &pair)?;
                 }
             }

@@ -93,6 +93,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_state,
             commands::choose_deck,
+            commands::cancel_deck,
             commands::choose_table,
             commands::set_setting_cmd,
             commands::deck_window,

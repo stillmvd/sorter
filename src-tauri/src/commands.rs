@@ -79,18 +79,10 @@ pub struct ByKind {
 #[serde(rename_all = "camelCase")]
 pub struct StateView {
     cache_dir: String,
-    developing: DevelopView,
+    developing: crate::develop::Status,
     settings: HashMap<String, String>,
     deck: DeckCounts,
     piles: Vec<PileView>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DevelopView {
-    done: i64,
-    total: i64,
-    paused: bool,
 }
 
 fn snapshot(conn: &Connection, state: &AppState) -> AppResult<StateView> {
@@ -108,17 +100,10 @@ fn snapshot(conn: &Connection, state: &AppState) -> AppResult<StateView> {
         }
         Err(_) => (DeckCounts { total: 0, left: 0, placed: 0, by_kind: ByKind::default() }, Vec::new()),
     };
-    let (done, total) = match get_setting(conn, "deck_path")? {
-        Some(d) => conn.query_row(
-            "SELECT COALESCE(SUM(stage != 'new'), 0), COUNT(*) FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred')",
-            params![d],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?,
-        None => (0, 0),
-    };
+    let developing = crate::develop::status(conn, state.paused.load(Ordering::Relaxed), dupes::printed(conn)?)?;
     Ok(StateView {
         cache_dir: state.data_dir.join("cache").to_string_lossy().into_owned(),
-        developing: DevelopView { done, total, paused: state.paused.load(Ordering::Relaxed) },
+        developing,
         settings,
         deck,
         piles,
@@ -173,6 +158,9 @@ pub fn choose_deck(state: State<AppState>, path: String) -> AppResult<Chosen> {
     choose(&conn, "deck_path", "table_path", &path)?;
     if before.as_deref() != Some(path.as_str()) {
         set_setting(&conn, "hints_enabled", "0")?;
+        if let Some(old) = before.filter(|b| !b.is_empty()) {
+            crate::develop::forget_deck(&conn, &state.data_dir.join("cache"), &old, true)?;
+        }
     }
     deck::sync(&conn, &path)?;
     Ok(conn.query_row(
@@ -180,6 +168,17 @@ pub fn choose_deck(state: State<AppState>, path: String) -> AppResult<Chosen> {
         params![path],
         |r| Ok(Chosen { count: r.get(0)?, bytes: r.get(1)? }),
     )?)
+}
+
+#[tauri::command]
+pub fn cancel_deck(state: State<AppState>) -> AppResult<()> {
+    let conn = state.conn();
+    if let Some(deck) = get_setting(&conn, "deck_path")? {
+        crate::develop::forget_deck(&conn, &state.data_dir.join("cache"), &deck, false)?;
+    }
+    conn.execute("DELETE FROM settings WHERE key = 'deck_path'", [])?;
+    state.wake.store(true, Ordering::Relaxed);
+    Ok(())
 }
 
 #[tauri::command]

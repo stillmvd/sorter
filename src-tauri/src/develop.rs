@@ -3,7 +3,7 @@ use crate::deck;
 use crate::dupes;
 use crate::hints::{self, Engine};
 use crate::photo;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::fs;
@@ -23,13 +23,29 @@ pub struct Meta {
     pub frames: Vec<image::RgbImage>,
 }
 
+pub static HINTS_FAILED: AtomicBool = AtomicBool::new(false);
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Progress {
+pub struct Named {
+    name: String,
+    card: Option<deck::CardView>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Status {
     done: i64,
     total: i64,
     paused: bool,
     printed: i64,
+    prints: i64,
+    hints: bool,
+    embedded: i64,
+    stage: &'static str,
+    speed: f64,
+    ready: bool,
+    pair: Option<Vec<Named>>,
 }
 
 #[cfg(windows)]
@@ -209,13 +225,99 @@ fn next(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<(i64, PathBuf)>
     rows.collect()
 }
 
-fn progress(conn: &Connection, paused: bool, printed: i64) -> rusqlite::Result<Progress> {
+pub fn status(conn: &Connection, paused: bool, printed: (i64, i64)) -> rusqlite::Result<Status> {
     let deck = db::get_setting(conn, "deck_path")?.unwrap_or_default();
-    conn.query_row(
-        "SELECT SUM(stage != 'new'), COUNT(*) FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred')",
+    let (total, done, embedded): (i64, i64, i64) = conn.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(stage != 'new'), 0), COALESCE(SUM(stage IN ('embedded','broken')), 0)
+         FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred')",
         params![deck],
-        |r| Ok(Progress { done: r.get::<_, Option<i64>>(0)?.unwrap_or(0), total: r.get(1)?, paused, printed }),
-    )
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    let hints = hints::enabled(conn) && !HINTS_FAILED.load(Ordering::Relaxed);
+    let stage = if done < total {
+        "frames"
+    } else if printed.0 < printed.1 {
+        "dupes"
+    } else if hints && embedded < total {
+        "hints"
+    } else {
+        "done"
+    };
+    Ok(Status {
+        done,
+        total,
+        paused,
+        printed: printed.0,
+        prints: printed.1,
+        hints,
+        embedded,
+        stage,
+        speed: 0.0,
+        ready: stage == "done",
+        pair: None,
+    })
+}
+
+fn named(conn: &Connection, path: &str) -> Named {
+    let p = Path::new(path);
+    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
+    let id: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM card WHERE (deck_path = ?1 AND file_name = ?2 COLLATE NOCASE) OR current_path = ?3 LIMIT 1",
+            params![p.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default(), name, path],
+            |r| r.get(0),
+        )
+        .ok();
+    let card = id.and_then(|id| deck::cards(conn, &[id]).ok()).and_then(|mut v| v.pop());
+    Named { name, card }
+}
+
+struct Report {
+    at: Instant,
+    dirty: bool,
+    stage: &'static str,
+    samples: VecDeque<(Instant, i64)>,
+}
+
+impl Report {
+    fn new() -> Self {
+        Report { at: Instant::now() - Duration::from_secs(1), dirty: false, stage: "", samples: VecDeque::new() }
+    }
+
+    fn tick(&mut self, app: &AppHandle, conn: &Connection, paused: bool, printed: &mut Printed, pair: Option<&(String, Option<String>)>, force: bool) {
+        self.dirty = true;
+        if !force && self.at.elapsed() < Duration::from_millis(250) {
+            return;
+        }
+        let Ok(mut s) = status(conn, paused, printed.get(conn)) else { return };
+        let value = match s.stage {
+            "frames" => s.done,
+            "dupes" => s.printed,
+            "hints" => s.embedded,
+            _ => 0,
+        };
+        let now = Instant::now();
+        if self.stage != s.stage || paused {
+            self.stage = s.stage;
+            self.samples.clear();
+        }
+        self.samples.push_back((now, value));
+        while self.samples.len() > 1 && now.duration_since(self.samples[0].0) > Duration::from_secs(10) {
+            self.samples.pop_front();
+        }
+        if let (Some(a), Some(b)) = (self.samples.front(), self.samples.back()) {
+            let dt = b.0.duration_since(a.0).as_secs_f64();
+            if dt >= 1.0 && !paused {
+                s.speed = (b.1 - a.1).max(0) as f64 / dt;
+            }
+        }
+        if s.stage == "dupes" {
+            s.pair = pair.map(|(a, b)| std::iter::once(a).chain(b).map(|p| named(conn, p)).collect());
+        }
+        let _ = app.emit("develop://progress", s);
+        self.at = now;
+        self.dirty = false;
+    }
 }
 
 enum Developed {
@@ -242,17 +344,25 @@ fn lower_priority() {
 }
 
 struct Printed {
-    value: i64,
+    value: (i64, i64),
     at: Instant,
 }
 
 impl Printed {
-    fn get(&mut self, conn: &Connection) -> i64 {
+    fn get(&mut self, conn: &Connection) -> (i64, i64) {
         if self.at.elapsed() > Duration::from_secs(5) {
-            self.value = dupes::printed(conn).map(|p| p.0).unwrap_or(self.value);
+            self.value = dupes::printed(conn).unwrap_or(self.value);
             self.at = Instant::now();
         }
         self.value
+    }
+
+    fn bump(&mut self) {
+        self.value.0 = (self.value.0 + 1).min(self.value.1);
+    }
+
+    fn reset(&mut self) {
+        self.at = Instant::now() - Duration::from_secs(60);
     }
 }
 
@@ -344,6 +454,7 @@ impl Learner {
                 Err(e) => {
                     eprintln!("hints: {e}");
                     self.failed = true;
+                    HINTS_FAILED.store(true, Ordering::Relaxed);
                 }
             }
         }
@@ -446,6 +557,41 @@ pub fn clear_cache(conn: &Connection, cache: &Path) -> rusqlite::Result<u64> {
     Ok(before.saturating_sub(after))
 }
 
+pub fn forget_deck(conn: &Connection, cache: &Path, deck: &str, only_untouched: bool) -> rusqlite::Result<usize> {
+    let placed: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM card WHERE deck_path = ?1 AND status = 'placed')", params![deck], |r| r.get(0))?;
+    if only_untouched && placed {
+        return Ok(0);
+    }
+    let cards: Vec<(i64, String, bool)> = conn
+        .prepare(
+            "SELECT id, file_name, EXISTS(SELECT 1 FROM move_item i WHERE i.card_id = card.id) FROM card
+             WHERE deck_path = ?1 AND status != 'placed'",
+        )?
+        .query_map(params![deck], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<Result<_, _>>()?;
+    let tx = conn.unchecked_transaction()?;
+    for (id, name, moved) in &cards {
+        let path = Path::new(deck).join(name).to_string_lossy().into_owned();
+        tx.execute("DELETE FROM embedding WHERE card_id = ?1", params![id])?;
+        if *moved {
+            tx.execute("UPDATE card SET stage = 'new', frames = 0 WHERE id = ?1", params![id])?;
+        } else {
+            tx.execute("DELETE FROM card WHERE id = ?1", params![id])?;
+        }
+        tx.execute("DELETE FROM fingerprint WHERE path = ?1", params![path])?;
+        tx.execute("DELETE FROM dupe WHERE a = ?1 OR b = ?1", params![path])?;
+        tx.execute("DELETE FROM dupe_dismissed WHERE a = ?1 OR b = ?1", params![path])?;
+    }
+    tx.commit()?;
+    let dirs: Vec<PathBuf> = cards.iter().map(|(id, ..)| cache.join(id.to_string())).collect();
+    let n = dirs.len();
+    let gone = std::thread::spawn(move || dirs.iter().for_each(|d| drop(fs::remove_dir_all(d))));
+    if cfg!(test) {
+        let _ = gone.join();
+    }
+    Ok(n)
+}
+
 const KEEP_PLACED_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
 pub fn tidy(conn: &Connection, cache: &Path, now: i64) -> rusqlite::Result<(usize, usize)> {
@@ -501,7 +647,8 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<Atomi
         let mut learner = Learner::new();
         let mut printer = dupes::near::Printer::new();
         let mut dupes_at = Instant::now() - Duration::from_secs(60);
-        let mut printed = Printed { value: 0, at: Instant::now() - Duration::from_secs(60) };
+        let mut printed = Printed { value: (0, 0), at: Instant::now() - Duration::from_secs(60) };
+        let mut report = Report::new();
         let mut developed: Vec<i64> = Vec::new();
         let mut series_dirty = false;
         let mut series_at = Instant::now();
@@ -546,15 +693,10 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<Atomi
                     let _ = app.emit("develop://cards", cards);
                 }
                 developed.clear();
-                if let Ok(p) = progress(&conn, false, printed.get(&conn)) {
-                    let _ = app.emit("develop://progress", p);
-                }
                 last_emit = Instant::now();
             }
             if !idle {
-                continue;
-            }
-            if !is_paused && learner.step(&app, &conn, &cache) {
+                report.tick(&app, &conn, false, &mut printed, None, false);
                 continue;
             }
             if !is_paused {
@@ -563,23 +705,21 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<Atomi
                         if changed {
                             let _ = app.emit("dupes://changed", ());
                         }
-                        if last_emit.elapsed() > Duration::from_millis(250) {
-                            if let Ok(p) = progress(&conn, false, printed.get(&conn)) {
-                                let _ = app.emit("develop://progress", p);
-                            }
-                            last_emit = Instant::now();
-                        }
+                        printed.bump();
+                        report.tick(&app, &conn, false, &mut printed, printer.last.as_ref(), false);
                         continue;
                     }
                     Ok(None) => {}
                     Err(e) => eprintln!("dupes: {e}"),
                 }
             }
-            if was_busy || wake.swap(false, Ordering::Relaxed) {
-                printed.at = Instant::now() - Duration::from_secs(60);
-                if let Ok(p) = progress(&conn, is_paused, printed.get(&conn)) {
-                    let _ = app.emit("develop://progress", p);
-                }
+            if !is_paused && learner.step(&app, &conn, &cache) {
+                report.tick(&app, &conn, false, &mut printed, None, false);
+                continue;
+            }
+            if was_busy || report.dirty || wake.swap(false, Ordering::Relaxed) {
+                printed.reset();
+                report.tick(&app, &conn, is_paused, &mut printed, None, true);
                 was_busy = false;
             }
             std::thread::sleep(Duration::from_millis(400));
@@ -641,6 +781,42 @@ mod tests {
         assert_eq!(cache_size(&cache), (0, 0));
         let stage = |id: i64| conn.query_row("SELECT stage FROM card WHERE id = ?1", params![id], |r| r.get::<_, String>(0)).unwrap();
         assert_eq!((stage(1).as_str(), stage(2).as_str(), stage(3).as_str()), ("new", "meta", "broken"));
+    }
+
+    #[test]
+    fn forget_deck_drops_untouched_deck_and_keeps_placed() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("cache");
+        let conn = Connection::open_in_memory().unwrap();
+        db::init(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO pile(id, table_path, name, ord) VALUES (1, 'T', 'A', 0);
+             INSERT INTO card(id, deck_path, file_name, size, mtime, position, stage, frames, status) VALUES
+               (1, 'D', 'a.mp4', 1, 0, 1, 'frames', 8, 'in_deck'),
+               (2, 'D', 'b.mp4', 1, 0, 2, 'frames', 8, 'in_deck'),
+               (3, 'E', 'c.mp4', 1, 0, 1, 'frames', 8, 'in_deck'),
+               (4, 'E', 'd.mp4', 1, 0, 2, 'frames', 8, 'placed');
+             INSERT INTO move(id, at, method, pile_id, state) VALUES (1, 1, 'key', 1, 'undone');
+             INSERT INTO move_item(move_id, card_id, from_path, step) VALUES (1, 2, 'x', 'done');
+             INSERT INTO embedding(card_id, vector) VALUES (1, x'00'), (2, x'00');",
+        )
+        .unwrap();
+        let a = Path::new("D").join("a.mp4").to_string_lossy().into_owned();
+        conn.execute("INSERT INTO fingerprint(path, size, mtime, state) VALUES (?1, 1, 0, 'ok')", params![a]).unwrap();
+        conn.execute("INSERT INTO dupe(a, b, kind, confidence) VALUES (?1, 'Z', 'same', 90)", params![a]).unwrap();
+        for id in ["1", "2", "3"] {
+            fs::create_dir_all(cache.join(id)).unwrap();
+        }
+        assert_eq!(forget_deck(&conn, &cache, "E", true).unwrap(), 0);
+        assert_eq!(forget_deck(&conn, &cache, "D", true).unwrap(), 2);
+        let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(count("SELECT COUNT(*) FROM card WHERE deck_path = 'D'"), 1);
+        assert_eq!(count("SELECT COUNT(*) FROM card WHERE id = 2 AND stage = 'new' AND frames = 0"), 1);
+        assert_eq!(count("SELECT COUNT(*) FROM embedding"), 0);
+        assert_eq!(count("SELECT COUNT(*) FROM fingerprint") + count("SELECT COUNT(*) FROM dupe"), 0);
+        assert!(!cache.join("1").exists() && !cache.join("2").exists() && cache.join("3").exists());
+        assert_eq!(forget_deck(&conn, &cache, "E", false).unwrap(), 1);
+        assert_eq!(count("SELECT COUNT(*) FROM card WHERE deck_path = 'E'"), 1);
     }
 
     #[test]

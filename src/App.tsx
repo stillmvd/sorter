@@ -76,9 +76,13 @@ export default function App() {
   const lastDeck = useRef<string | undefined>(undefined);
   useEffect(() => {
     const deck = state?.settings.deck_path;
-    if (!state || !deck) return;
-    if (lastDeck.current !== undefined && lastDeck.current !== deck && state.developing.done < state.developing.total) {
-      setDevelopView(true);
+    if (!state) return;
+    if (!deck) {
+      lastDeck.current = undefined;
+      return;
+    }
+    if (lastDeck.current !== deck) {
+      setDevelopView(!state.developing.ready);
       setScreen("deck");
     }
     lastDeck.current = deck;
@@ -100,12 +104,18 @@ export default function App() {
           onStart={async () => {
             await ipc.setSetting("mode", "deck");
             setStarted(true);
-            setDevelopView(true);
             await reload();
           }}
         />
       )}
-      {state && !showStart && ready && developView && <Develop state={state} onDone={() => setDevelopView(false)} />}
+      {state && !showStart && ready && developView && <Develop
+          state={state}
+          onDone={() => setDevelopView(false)}
+          onCancel={() => void ipc.cancelDeck().then(() => {
+            setDevelopView(false);
+            return reload();
+          })}
+        />}
       {state && !showStart && ready && !developView && screen === "piles" && (
         <PilesScreen table={state.settings.table_path ?? ""} onBack={back} />
       )}
