@@ -1,7 +1,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { useState } from "react";
-import { errorText, ipc, type AppState } from "../../lib/ipc";
-import { plural } from "../../lib/plural";
+import { useEffect, useState } from "react";
+import { errorText, ipc, onReading, type AppState } from "../../lib/ipc";
+import { nf, plural } from "../../lib/plural";
 import { Button } from "../ui/Button";
 import { Heading } from "../ui/PageHeader";
 import { Toggle } from "../ui/Toggle";
@@ -44,6 +44,12 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
   const [deckInfo, setDeckInfo] = useState<{ count: number; bytes: number } | null>(null);
   const [errors, setErrors] = useState<{ deck?: string; table?: string }>({});
   const [reading, setReading] = useState<string | null>(null);
+  const [found, setFound] = useState(0);
+
+  useEffect(() => {
+    const off = onReading(setFound);
+    return () => void off.then((f) => f());
+  }, []);
   const deck = state.settings.deck_path;
   const table = state.settings.table_path;
   const hints = state.settings.hints_enabled === "1";
@@ -56,6 +62,7 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
     if (typeof path !== "string") return;
     try {
       if (which === "deck") {
+        setFound(0);
         setReading(path);
         setDeckInfo(await ipc.chooseDeck(path));
       } else await ipc.chooseTable(path);
@@ -84,7 +91,7 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
             done={!!deck}
             title="Откуда брать видео"
             value={reading ?? deck ?? "Папка не выбрана"}
-            note={reading ? "Читаю папку…" : deck ? `Колода — ${count} ${plural(count, "видео", "видео", "видео")}${deckInfo ? ` · ${gb(deckInfo.bytes)}` : ""}. Берутся только видео в самой папке, вложенные не трогаю.` : "Колода — папка с неразобранными видео."}
+            note={reading ? `Читаю папку… нашёл ${nf(found)} ${plural(found, "файл", "файла", "файлов")}` : deck ? `Колода — ${count} ${plural(count, "видео", "видео", "видео")}${deckInfo ? ` · ${gb(deckInfo.bytes)}` : ""}. Берутся только видео в самой папке, вложенные не трогаю.` : "Колода — папка с неразобранными видео."}
             error={errors.deck ?? gone("deck")}
             action={
               <Button variant={deck ? "secondary" : "primary"} onClick={() => pick("deck")}>
@@ -145,7 +152,12 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
           <div className={`absolute inset-0 translate-x-[18px] translate-y-0.5 rotate-5 rounded-[28px] bg-strong ${deck ? "" : "deck-breathe-mid"}`} />
           <div className="absolute inset-0 flex flex-col justify-between overflow-hidden rounded-[28px] border border-line bg-film p-5 text-[#ececef] shadow-[0_24px_60px_rgb(0_0_0/30%)]">
             <div className="relative z-1 text-[13px] font-medium text-[#a2a2a9]">колода</div>
-            {deck ? (
+            {reading ? (
+              <div className="flex flex-col gap-4">
+                <div className="text-[64px] leading-[0.9] font-bold tracking-[-0.04em] tabular-nums">{nf(found)}</div>
+                <div className="reading-bar" aria-hidden="true" />
+              </div>
+            ) : deck ? (
               <div className="text-[88px] leading-[0.9] font-bold tracking-[-0.04em]">{count}</div>
             ) : (
               <div className="pointer-events-none absolute inset-0 grid place-items-center" aria-hidden="true">
@@ -160,7 +172,7 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
                 </div>
               </div>
             )}
-            <div className="relative z-1 text-[13px] font-medium text-[#a2a2a9]">{deck ? plural(count, "карта", "карты", "карт") : "выбери папку"}</div>
+            <div className="relative z-1 text-[13px] font-medium text-[#a2a2a9]">{reading ? "нахожу файлы" : deck ? plural(count, "карта", "карты", "карт") : "выбери папку"}</div>
           </div>
         </div>
         <p className="m-0 max-w-[300px] text-center text-[13px] leading-normal text-dim">

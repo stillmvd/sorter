@@ -6,6 +6,8 @@ export function plural(n: number, one: string, few: string, many: string) {
   return many;
 }
 
+export const nf = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+
 export const cardsWord = (n: number) => `${n} ${plural(n, "карта", "карты", "карт")}`;
 
 export const filesWord = (n: number) => `${n} ${plural(n, "файл", "файла", "файлов")}`;

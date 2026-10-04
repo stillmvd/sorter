@@ -173,7 +173,7 @@ pub struct Chosen {
 }
 
 #[tauri::command(async)]
-pub fn choose_deck(state: State<AppState>, path: String) -> AppResult<Chosen> {
+pub fn choose_deck(app: AppHandle, state: State<AppState>, path: String) -> AppResult<Chosen> {
     let conn = state.conn();
     let before = get_setting(&conn, "deck_path")?;
     choose(&conn, "deck_path", "table_path", &path)?;
@@ -183,7 +183,9 @@ pub fn choose_deck(state: State<AppState>, path: String) -> AppResult<Chosen> {
             crate::develop::forget_deck(&conn, &state.data_dir.join("cache"), &old, true)?;
         }
     }
-    deck::sync(&conn, &path)?;
+    deck::sync_seen(&conn, &path, &mut |found| {
+        let _ = app.emit("deck://reading", found);
+    })?;
     Ok(conn.query_row(
         "SELECT COUNT(*), COALESCE(SUM(size), 0) FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred')",
         params![path],

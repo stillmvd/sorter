@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ipc, type AppState, type DupesEstimate } from "../../lib/ipc";
-import { plural } from "../../lib/plural";
+import { nf, plural } from "../../lib/plural";
 import { Toggle } from "../ui/Toggle";
 
 export type DupesSetting = { enabled: boolean; scope: "deck" | "all" };
@@ -13,7 +13,6 @@ export const dupesSetting = (state: AppState): DupesSetting => ({
 export const widened = (a: DupesSetting, b: DupesSetting) =>
   b.enabled && (!a.enabled || (a.scope === "deck" && b.scope === "all"));
 
-const nf = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 
 export function useEstimate(scope: "deck" | "all", on: boolean, key: string) {
   const [est, setEst] = useState<DupesEstimate | null>(null);

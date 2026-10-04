@@ -187,6 +187,7 @@ export const onDeckChanged = (fn: (d: { added: Card[]; gone: number[] }) => void
   listen<{ added: Card[]; gone: number[] }>("deck://changed", (e) => fn(e.payload));
 export const onPilesChanged = (fn: (p: Pile[]) => void) => listen<Pile[]>("piles://changed", (e) => fn(e.payload));
 export const onHintsChanged = (fn: () => void) => listen("hints://changed", () => fn());
+export const onReading = (fn: (found: number) => void) => listen<number>("deck://reading", (e) => fn(e.payload));
 export const onSeries = (fn: () => void) => listen("deck://series", () => fn());
 export const onDupesChanged = (fn: () => void) => listen("dupes://changed", () => fn());
 export type UpdatePhase = "idle" | "checking" | "latest" | "downloading" | "ready" | "failed" | "off";

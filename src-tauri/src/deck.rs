@@ -137,6 +137,10 @@ fn ready(_: &Path) -> bool {
 }
 
 pub fn sync(conn: &Connection, deck: &str) -> AppResult<SyncResult> {
+    sync_seen(conn, deck, &mut |_| {})
+}
+
+pub fn sync_seen(conn: &Connection, deck: &str, seen: &mut dyn FnMut(usize)) -> AppResult<SyncResult> {
     let dir = Path::new(deck);
     let mut files: Vec<(String, i64, i64)> = fs::read_dir(dir)
         .map_err(|e| io_error(&e, dir))?
@@ -179,7 +183,11 @@ pub fn sync(conn: &Connection, deck: &str) -> AppResult<SyncResult> {
     )?;
     let mut added = Vec::new();
     let mut pending = false;
-    for (name, size, mtime) in files {
+    let total = files.len();
+    for (i, (name, size, mtime)) in files.into_iter().enumerate() {
+        if i % 50 == 0 {
+            seen(i);
+        }
         match rows.get(&name.to_lowercase()) {
             Some((id, s, m)) if (*s, *m) != (size, mtime) => {
                 tx.execute(
@@ -208,6 +216,7 @@ pub fn sync(conn: &Connection, deck: &str) -> AppResult<SyncResult> {
     }
     drop(insert);
     tx.commit()?;
+    seen(total);
     Ok(SyncResult { added, gone, pending })
 }
 
@@ -300,6 +309,20 @@ mod tests {
         assert_eq!(taken_from_name("1525005239349.mp4"), Some(1525005239349));
         assert_eq!(taken_from_name("VID20220216151658.mp4"), Some(1645024618000));
         assert_eq!(taken_from_name("clip.mp4"), None);
+    }
+
+    #[test]
+    fn sync_reports_found_files() {
+        let tmp = TempDir::new().unwrap();
+        for i in 0..120 {
+            fs::write(tmp.path().join(format!("{i}.mp4")), b"v").unwrap();
+        }
+        fs::write(tmp.path().join("notes.txt"), b"x").unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        db::init(&conn).unwrap();
+        let mut seen = Vec::new();
+        sync_seen(&conn, &tmp.path().to_string_lossy(), &mut |n| seen.push(n)).unwrap();
+        assert_eq!(seen, vec![0, 50, 100, 120]);
     }
 
     #[test]

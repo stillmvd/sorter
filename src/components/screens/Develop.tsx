@@ -1,13 +1,13 @@
 import { Copy, Film, Pause, Play } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ipc, onProgress, type AppState, type Developing } from "../../lib/ipc";
-import { plural } from "../../lib/plural";
+import { nf, plural } from "../../lib/plural";
+import { Learn } from "../fx/Learn";
 import { Scanner } from "../fx/Scanner";
 import { Sieve } from "../fx/Sieve";
 import { Button } from "../ui/Button";
 import { Heading } from "../ui/PageHeader";
 
-const nf = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 
 type Purpose = "deck" | "dupes" | "search";
 type Status = "done" | "run" | "pause" | "wait";
@@ -109,14 +109,15 @@ function Ring({ pct, paused }: { pct: number; paused: boolean }) {
   );
 }
 
-function Live({ p }: { p: Developing }) {
+function Live({ p, piles }: { p: Developing; piles: string[] }) {
   const scan = p.total === 0 && p.stage === "frames" && !p.search;
   const dupes = p.stage === "dupes";
-  const caption = scan ? "ИЩУ ФАЙЛЫ" : dupes ? "СРАВНИВАЮ" : "ПРОЯВЛЯЮ КАДРЫ";
+  const hints = p.stage === "hints";
+  const caption = scan ? "ИЩУ ФАЙЛЫ" : dupes ? "СРАВНИВАЮ" : hints ? "УЧУСЬ УГАДЫВАТЬ СТОПКУ" : "ПРОЯВЛЯЮ КАДРЫ";
   return (
     <div className="relative grid min-h-0 flex-1 place-items-center overflow-hidden rounded-[20px] bg-film">
       <span className="absolute left-4 top-3 z-1 font-mono text-[10px] tracking-[0.06em] text-[var(--film-text)]">{caption}</span>
-      {dupes ? <Sieve paused={p.paused} /> : <Scanner paused={p.paused} />}
+      {dupes ? <Sieve paused={p.paused} /> : hints ? <Learn piles={piles} paused={p.paused} /> : <Scanner paused={p.paused} />}
     </div>
   );
 }
@@ -253,7 +254,7 @@ export function Develop({ state, purpose, onDone, onCancel }: { state: AppState;
             </button>
           )}
         </div>
-        {p.ready ? <Summary title={summary.title} tiles={summary.tiles} /> : <Live p={p} />}
+        {p.ready ? <Summary title={summary.title} tiles={summary.tiles} /> : <Live p={p} piles={state.piles.filter((x) => !x.isTrash).map((x) => x.name)} />}
       </section>
       <aside className="flex w-[380px] shrink-0 flex-col gap-3 rounded-[28px] bg-cosmic px-[26px] pb-[26px] pt-7">
         <Heading light="Что" bold="происходит" size={28} />

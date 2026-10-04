@@ -2,7 +2,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { Check, CircleAlert, Folder, Minus, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { errorText, ipc, type Pile, type SearchPreview } from "../../lib/ipc";
-import { plural } from "../../lib/plural";
+import { nf, plural } from "../../lib/plural";
 import { filesWord } from "../screens/DupesStep";
 import { Button } from "../ui/Button";
 import { Kbd } from "../ui/Kbd";
@@ -10,7 +10,6 @@ import { useModalKeys } from "./EnableDupes";
 
 export type SearchSet = { piles: string[]; deck: boolean; folders: string[] };
 
-const nf = (n: number) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 
 function Box({ on, mixed = false }: { on: boolean; mixed?: boolean }) {
   return (

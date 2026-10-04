@@ -361,3 +361,128 @@
     opacity: 0;
   }
 }
+
+.reading-bar {
+  position: relative;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 1px;
+  background: #26262a;
+}
+.reading-bar::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 40%;
+  border-radius: 1px;
+  background: linear-gradient(90deg, transparent, #ececef, transparent);
+  transform: translateX(-100%);
+  animation: reading-sweep 1.4s linear infinite;
+}
+@keyframes reading-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+.learn {
+  position: relative;
+  isolation: isolate;
+  width: 440px;
+  height: 280px;
+  transition: opacity 320ms cubic-bezier(0.2, 0, 0, 1);
+}
+.learn > i {
+  position: absolute;
+  bottom: 28px;
+  width: 56px;
+  height: 78px;
+  margin-left: -28px;
+  border-radius: 10px;
+  background: #19191c;
+  box-shadow: inset 0 0 0 1px #26262a;
+  animation: learn-land 4.8s linear infinite;
+}
+.learn > i::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: 10px;
+  background: #19191c;
+  box-shadow: inset 0 0 0 1px #26262a;
+  transform: translate(-4px, -5px) rotate(-5deg);
+}
+.learn > i > span {
+  position: absolute;
+  left: 50%;
+  top: 88px;
+  max-width: 120px;
+  overflow: hidden;
+  transform: translateX(-50%);
+  color: var(--film-text);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.learn > b {
+  position: absolute;
+  left: 50%;
+  top: 18px;
+  width: 44px;
+  height: 62px;
+  margin-left: -22px;
+  border-radius: 8px;
+  background: linear-gradient(var(--a), #3c3c43, #1e1e22);
+  box-shadow: inset 0 0 0 1px #45454c;
+  opacity: 0;
+  animation: learn-drop 4.8s cubic-bezier(0.2, 0, 0, 1) infinite;
+}
+.learn.paused {
+  opacity: 0.5;
+}
+.learn.paused > i,
+.learn.paused > b {
+  animation-play-state: paused;
+}
+@keyframes learn-drop {
+  0% {
+    opacity: 0;
+    transform: translate(0, -10px);
+  }
+  6%,
+  20% {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+  34% {
+    opacity: 1;
+    transform: translate(var(--x), 166px) scale(0.86);
+  }
+  40%,
+  100% {
+    opacity: 0;
+    transform: translate(var(--x), 166px) scale(0.86);
+  }
+}
+@keyframes learn-land {
+  0%,
+  32% {
+    box-shadow: inset 0 0 0 1px #26262a;
+  }
+  36% {
+    box-shadow:
+      inset 0 0 0 1.5px #ececef,
+      0 0 0 6px rgb(236 236 239 / 10%);
+  }
+  50%,
+  100% {
+    box-shadow: inset 0 0 0 1px #26262a;
+  }
+}
