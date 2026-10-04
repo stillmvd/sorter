@@ -1,5 +1,5 @@
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Copy, Folder, FolderOpen, History, Image as ImageIcon, LayoutGrid, Layers, Loader2, Plus, Settings, Video } from "lucide-react";
+import { Copy, CopyX, Folder, FolderOpen, History, Image as ImageIcon, LayoutGrid, Layers, Loader2, Plus, Search, Settings, Video } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { errorText, ipc, mergeCards, onCards, onDeckChanged, onDupesChanged, onPilesChanged, onProgress, onSeries, type AppState, type Card, type DupeGroup, type DupeGroups, type DupeView, type GroupItem, type Kind, type Method, type Move, type Pile, type SeriesView } from "../../lib/ipc";
 import { SeriesPanel, seriesSpan, type Rest } from "./SeriesPanel";
@@ -32,6 +32,11 @@ import { PilesRow } from "./PilesRow";
 import { Compare } from "../dupes/Compare";
 import { DupesScreen, SURE, groupTitle, type Filter } from "../dupes/DupesScreen";
 import { GroupCompare } from "../dupes/GroupCompare";
+import { DupesOff } from "../dupes/DupesOff";
+import { EnableDupes } from "../dupes/EnableDupes";
+import { FindDupes, type SearchSet } from "../dupes/FindDupes";
+import { SearchBanner } from "../dupes/SearchBanner";
+import { dupesSetting, widened, type DupesSetting } from "../screens/DupesStep";
 
 const mb = (b: number) => `${(b / 1024 ** 2).toFixed(1).replace(".", ",")} МБ`;
 const date = (ms: number) => new Date(ms).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
@@ -73,6 +78,8 @@ export function DeckScreen({
   onJournal,
   onSettings,
   onHome,
+  onWiden,
+  onSearch,
   banner,
 }: {
   initial: AppState;
@@ -80,6 +87,8 @@ export function DeckScreen({
   onJournal: () => void;
   onSettings: () => void;
   onHome: () => void;
+  onWiden: (before: DupesSetting) => void;
+  onSearch: () => void;
   banner?: React.ReactNode;
 }) {
   const [cards, setCards] = useState<Card[]>([]);
@@ -122,6 +131,9 @@ export function DeckScreen({
     }
   }, []);
   const [groups, setGroups] = useState<DupeGroups | null>(null);
+  const [dupesSet, setDupesSet] = useState<DupesSetting>(() => dupesSetting(initial));
+  const [ask, setAsk] = useState(false);
+  const [find, setFind] = useState(false);
   const [filter, setFilter] = useState<Filter | null>(null);
   const [sheet, setSheet] = useState<Card[]>([]);
   const [sheetLoaded, setSheetLoaded] = useState(false);
@@ -156,6 +168,38 @@ export function DeckScreen({
     const off = onDupesChanged(() => void loadGroups());
     return () => void off.then((f) => f());
   }, [loadGroups]);
+
+  const startDupes = async (scope: "deck" | "all") => {
+    const after: DupesSetting = { enabled: true, scope };
+    setAsk(false);
+    try {
+      await ipc.setSetting("dupes_scope", scope);
+      await ipc.setSetting("dupes_enabled", "1");
+    } catch (e) {
+      setToast(errorText(e));
+      return;
+    }
+    if (widened(dupesSet, after)) onWiden(dupesSet);
+    else {
+      setDupesSet(after);
+      void loadGroups();
+    }
+  };
+
+  const startSearch = async (s: SearchSet) => {
+    setFind(false);
+    try {
+      await ipc.searchStart(s.piles, s.deck, s.folders);
+      onSearch();
+    } catch (e) {
+      setToast(errorText(e));
+    }
+  };
+
+  const closeSearch = async () => {
+    await ipc.searchClear();
+    void loadGroups();
+  };
 
   const trashPaths = useCallback(
     async (paths: string[]) => {
@@ -683,7 +727,20 @@ export function DeckScreen({
       onSettings();
       return;
     }
-    if (mode === "dupes") return;
+    if (mode === "dupes") {
+      if (e.ctrlKey || e.altKey || e.metaKey) return;
+      if (e.code === "KeyF") {
+        e.preventDefault();
+        setFind(true);
+      } else if (e.key === "Escape" && groups?.search) {
+        e.preventDefault();
+        void closeSearch();
+      } else if (e.key === "Enter" && !dupesSet.enabled && !groups?.search) {
+        e.preventDefault();
+        setAsk(true);
+      }
+      return;
+    }
     if (e.ctrlKey && e.code === "KeyE") {
       e.preventDefault();
       if (focused) void revealItemInDir(focused.path);
@@ -805,6 +862,7 @@ export function DeckScreen({
   const picked = sheetShown.reduce((n, c) => n + Number(selected.has(c.id)), 0);
   const pickedFiles = sheetShown.reduce((n, c) => n + (selected.has(c.id) ? (seriesCounts.get(c.id) ?? 1) : 0), 0);
   const sure = groups?.groups.filter((g) => g.confidence >= SURE).length ?? 0;
+  const dupesOff = !dupesSet.enabled && !groups?.search;
 
   if (empty && mode !== "dupes")
     return (
@@ -839,9 +897,15 @@ export function DeckScreen({
       <PageHeader
         tag={
           mode === "dupes" ? (
-            <Tag icon={<Copy strokeWidth={1.5} />}>
-              Отпечатано {groups?.printed ?? 0} из {groups?.total ?? 0} · колода и все стопки
-            </Tag>
+            groups?.search ? (
+              <Tag icon={<Search strokeWidth={1.5} />}>Отдельный поиск</Tag>
+            ) : dupesSet.enabled ? (
+              <Tag icon={<Copy strokeWidth={1.5} />}>
+                Отпечатано {groups?.printed ?? 0} из {groups?.total ?? 0}
+              </Tag>
+            ) : (
+              <Tag icon={<CopyX strokeWidth={1.5} />}>Поиск дублей выключен</Tag>
+            )
           ) : mode === "deck" ? (
             <Tag icon={<Layers strokeWidth={1.5} />}>
               Разложено {shown.placed} из {shown.placed + shown.left}
@@ -855,18 +919,39 @@ export function DeckScreen({
             </Tag>
           )
         }
-        light={mode === "dupes" ? "Дубли," : mode === "deck" ? (kind === "photo" ? "Фото в колоде" : kind === "video" ? "Видео в колоде" : "В колоде") : "На столе,"}
+        light={mode === "dupes" ? (dupesOff ? "Дубли" : "Дубли,") : mode === "deck" ? (kind === "photo" ? "Фото в колоде" : kind === "video" ? "Видео в колоде" : "В колоде") : "На столе,"}
         bold={
           mode === "dupes"
-            ? `${sure} ${plural(sure, "группа", "группы", "групп")}`
+            ? dupesOff
+              ? "не ищу"
+              : `${sure} ${plural(sure, "группа", "группы", "групп")}`
             : mode === "deck"
               ? String(Math.max(shown.left, 0))
               : picked
                 ? `отмечено ${picked}`
                 : cardsWord(sheet.length)
         }
+        sub={
+          mode === "dupes" && dupesSet.enabled && !groups?.search ? (
+            <div className="flex items-center gap-2 text-[13px] font-medium text-dim">
+              Ищу <b className="text-fg">{dupesSet.scope === "all" ? "в колоде и на столе" : "внутри колоды"}</b>
+              <button
+                type="button"
+                onClick={() => setAsk(true)}
+                className="inline-flex h-6 items-center rounded-full bg-raised px-2.5 text-xs font-bold text-fg transition-colors duration-200 ease-trail hover:bg-strong"
+              >
+                Изменить
+              </button>
+            </div>
+          ) : undefined
+        }
         actions={
           <>
+            {mode === "dupes" && dupesSet.enabled && !groups?.search && (
+              <Button size={40} hotkey="F" icon={<Search size={16} strokeWidth={1.5} />} onClick={() => setFind(true)}>
+                Найти дубли…
+              </Button>
+            )}
             {mixed && <KindFilter value={kind} counts={kindCounts} onChange={switchKind} />}
             <Segment label="Режим" options={modes(sure)} value={mode} onChange={switchMode} />
             <IconButton label="Журнал" hint="Журнал ходов — Ctrl J" onClick={onJournal}>
@@ -883,7 +968,12 @@ export function DeckScreen({
       />
       {banner}
 
-      {mode === "dupes" ? (
+      {mode === "dupes" && groups?.search && (
+        <SearchBanner search={groups.search} groups={sure} onNew={() => setFind(true)} onClose={() => void closeSearch()} />
+      )}
+      {mode === "dupes" && dupesOff ? (
+        <DupesOff onEnable={() => setAsk(true)} onFind={() => setFind(true)} />
+      ) : mode === "dupes" ? (
         <DupesScreen
           groups={(groups?.groups ?? []).filter((g) => kind === "all" || isPhotoPath(g.items[0]?.path ?? "") === (kind === "photo"))}
           filter={filter}
@@ -1103,6 +1193,24 @@ export function DeckScreen({
         >
           {toast}
         </div>
+      )}
+      {ask && mode === "dupes" && (
+        <EnableDupes
+          scope={dupesSet.scope}
+          piles={piles.filter((p) => !p.isTrash).length}
+          onStart={(scope) => void startDupes(scope)}
+          onClose={() => setAsk(false)}
+        />
+      )}
+      {find && mode === "dupes" && (
+        <FindDupes
+          piles={piles}
+          table={initial.settings.table_path ?? ""}
+          deckPath={initial.settings.deck_path ?? ""}
+          initial={groups?.search ? { piles: groups.search.piles, deck: groups.search.deck, folders: groups.search.folders } : null}
+          onStart={(s) => void startSearch(s)}
+          onClose={() => setFind(false)}
+        />
       )}
       {groupCmp && mode === "dupes" && (
         <GroupCompare

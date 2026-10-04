@@ -755,6 +755,24 @@ mod tests {
         assert!(!file.exists());
     }
 
+    #[test]
+    fn trash_copy_from_outside_folder_comes_back_on_undo() {
+        let mut e = env();
+        with_trash(&e);
+        let ext = e.table.parent().unwrap().join("ext");
+        fs::create_dir_all(&ext).unwrap();
+        let file = ext.join("1525005239349.mp4");
+        fs::write(&file, b"copy").unwrap();
+        let m = trash_copies_with(&mut e.conn, std::slice::from_ref(&file), cross_free).unwrap();
+        assert_eq!((m.items.len(), m.items[0].card_id), (1, None));
+        assert!(!file.exists());
+        let logged: i64 = e.conn.query_row("SELECT COUNT(*) FROM move", [], |r| r.get(0)).unwrap();
+        assert_eq!(logged, 1);
+        let undone = undo_last(&e.conn).unwrap();
+        assert_eq!(undone.len(), 1);
+        assert_eq!(fs::read(&file).unwrap(), b"copy");
+    }
+
     fn cross_free(from: &Path, to: &Path) -> io::Result<()> {
         fs::rename(from, to)
     }

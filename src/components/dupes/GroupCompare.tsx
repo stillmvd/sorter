@@ -1,6 +1,6 @@
 import { Copy } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { isPhotoPath, media, pileLabel, type DupeGroup, type GroupItem } from "../../lib/ipc";
+import { isPhotoPath, media, placeLabel, type DupeGroup, type GroupItem } from "../../lib/ipc";
 import { plural } from "../../lib/plural";
 import { Button } from "../ui/Button";
 
@@ -178,8 +178,8 @@ export function GroupCompare({
                   <div className="truncate text-base font-bold" title={it.path}>
                     {name(it.path)}
                   </div>
-                  <div className="truncate text-[13px] text-dim" title={it.where === "pile" ? pileLabel(it) : undefined}>
-                    {it.where === "pile" ? `в стопке «${pileLabel(it)}»` : "в колоде"}
+                  <div className={`truncate text-[13px] ${it.where === "folder" ? "text-fg" : "text-dim"}`} title={placeLabel(it)}>
+                    {placeLabel(it)}
                   </div>
                 </div>
                 <div className="flex flex-col">

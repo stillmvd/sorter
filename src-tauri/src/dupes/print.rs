@@ -140,7 +140,31 @@ fn corr(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>() / a.len() as f32
 }
 
+static CONTAINS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<(u64, u64), (f32, f32)>>> =
+    std::sync::LazyLock::new(Default::default);
+
+fn digest(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut h);
+    h.finish()
+}
+
 pub fn contains(big: &[u8], small: &[u8]) -> (f32, f32) {
+    let key = (digest(big), digest(small));
+    if let Some(&hit) = CONTAINS.lock().unwrap().get(&key) {
+        return hit;
+    }
+    let found = search(big, small);
+    let mut memo = CONTAINS.lock().unwrap();
+    if memo.len() >= 100_000 {
+        memo.clear();
+    }
+    memo.insert(key, found);
+    found
+}
+
+fn search(big: &[u8], small: &[u8]) -> (f32, f32) {
     let (Some(big), Some(small)) = (Plane::parse(big), Plane::parse(small)) else { return (0.0, 1.0) };
     let aspect = small.h as f32 / small.w as f32;
     let (hb, hs) = (big.half(), small.half());

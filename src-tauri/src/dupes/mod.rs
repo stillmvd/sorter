@@ -2,6 +2,7 @@ pub mod index;
 pub mod matcher;
 pub mod near;
 pub mod print;
+pub mod search;
 
 use crate::db;
 use crate::deck;
@@ -9,7 +10,7 @@ use crate::error::AppResult;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -42,7 +43,7 @@ fn hidden(e: &fs::DirEntry) -> bool {
     }
 }
 
-fn walk(dir: &Path, out: &mut Vec<FileInfo>) {
+pub(crate) fn walk(dir: &Path, out: &mut Vec<FileInfo>) {
     let Ok(it) = fs::read_dir(dir) else { return };
     for e in it.filter_map(|e| e.ok()) {
         let Ok(kind) = e.file_type() else { continue };
@@ -95,9 +96,69 @@ pub fn forget_missing(conn: &Connection) -> rusqlite::Result<usize> {
     Ok(gone.len())
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum Scope {
+    Off,
+    Deck,
+    All,
+    Search(search::SearchSpec),
+}
+
+impl Scope {
+    pub fn current(conn: &Connection) -> rusqlite::Result<Scope> {
+        if let Some(spec) = search::load(conn)?.filter(|s| s.active()) {
+            return Ok(Scope::Search(spec));
+        }
+        Scope::deck_only(conn)
+    }
+
+    pub fn work(conn: &Connection) -> rusqlite::Result<Scope> {
+        match Scope::current(conn)? {
+            Scope::Search(spec) if spec.state != "running" => Scope::deck_only(conn),
+            scope => Ok(scope),
+        }
+    }
+
+    pub fn deck_only(conn: &Connection) -> rusqlite::Result<Scope> {
+        if db::get_setting(conn, "dupes_enabled")?.as_deref() != Some("1") {
+            return Ok(Scope::Off);
+        }
+        Ok(if db::get_setting(conn, "dupes_scope")?.as_deref() == Some("all") { Scope::All } else { Scope::Deck })
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Scope::Off => "off",
+            Scope::Deck => "deck",
+            Scope::All => "all",
+            Scope::Search(_) => "search",
+        }
+    }
+}
+
 pub fn files(conn: &Connection) -> rusqlite::Result<Vec<FileInfo>> {
+    scope_files(conn, &Scope::work(conn)?)
+}
+
+pub fn scope_files(conn: &Connection, scope: &Scope) -> rusqlite::Result<Vec<FileInfo>> {
+    match scope {
+        Scope::Off => Ok(Vec::new()),
+        Scope::Deck => deck_files(conn),
+        Scope::All => {
+            let mut out = deck_files(conn)?;
+            out.extend(pile_files(conn)?);
+            Ok(out)
+        }
+        Scope::Search(spec) => search::files(conn, spec),
+    }
+}
+
+pub fn path_set(files: &[FileInfo]) -> HashSet<String> {
+    files.iter().map(|f| f.path.to_lowercase()).collect()
+}
+
+pub(crate) fn deck_files(conn: &Connection) -> rusqlite::Result<Vec<FileInfo>> {
     let deck = db::get_setting(conn, "deck_path")?.unwrap_or_default();
-    let table = db::get_setting(conn, "table_path")?.unwrap_or_default();
     let mut out = Vec::new();
     let names: Vec<String> = conn
         .prepare("SELECT file_name FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred') ORDER BY status = 'deferred', position")?
@@ -113,6 +174,12 @@ pub fn files(conn: &Connection) -> rusqlite::Result<Vec<FileInfo>> {
             .unwrap_or_default();
         out.extend(names.iter().filter_map(|n| listed.remove(&n.to_lowercase())));
     }
+    Ok(out)
+}
+
+fn pile_files(conn: &Connection) -> rusqlite::Result<Vec<FileInfo>> {
+    let table = db::get_setting(conn, "table_path")?.unwrap_or_default();
+    let mut out = Vec::new();
     let piles: Vec<String> = conn
         .prepare("SELECT name FROM pile WHERE table_path = ?1 AND is_trash = 0 AND exists_on_disk = 1")?
         .query_map(params![table], |r| r.get(0))?
@@ -163,9 +230,9 @@ fn cached_sha(conn: &Connection, f: &FileInfo) -> rusqlite::Result<Option<Vec<u8
     Ok(Some(sha))
 }
 
-pub fn exact_pairs(conn: &Connection) -> rusqlite::Result<BTreeSet<(String, String)>> {
+pub fn exact_pairs(conn: &Connection, all: Vec<FileInfo>) -> rusqlite::Result<BTreeSet<(String, String)>> {
     let mut by_size: HashMap<i64, Vec<FileInfo>> = HashMap::new();
-    for f in files(conn)? {
+    for f in all {
         by_size.entry(f.size).or_default().push(f);
     }
     let mut pairs = BTreeSet::new();
@@ -192,17 +259,26 @@ pub fn exact_pairs(conn: &Connection) -> rusqlite::Result<BTreeSet<(String, Stri
 }
 
 pub fn refresh_exact(conn: &Connection) -> rusqlite::Result<bool> {
-    let pairs = exact_pairs(conn)?;
+    let all = files(conn)?;
+    if all.is_empty() {
+        return Ok(false);
+    }
+    let inside = path_set(&all);
+    let pairs = exact_pairs(conn, all)?;
     let known: BTreeSet<(String, String)> = conn
         .prepare("SELECT a, b FROM dupe WHERE kind = 'exact'")?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<Result<_, _>>()?;
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        .filter_map(|r| r.ok())
+        .filter(|(a, b)| inside.contains(&a.to_lowercase()) && inside.contains(&b.to_lowercase()))
+        .collect();
     if known == pairs {
         return Ok(false);
     }
     let tx = conn.unchecked_transaction()?;
-    tx.execute("DELETE FROM dupe WHERE kind = 'exact'", [])?;
-    for (a, b) in &pairs {
+    for (a, b) in known.difference(&pairs) {
+        tx.execute("DELETE FROM dupe WHERE a = ?1 AND b = ?2 AND kind = 'exact'", params![a, b])?;
+    }
+    for (a, b) in pairs.difference(&known) {
         tx.execute(
             "INSERT OR REPLACE INTO dupe(a, b, kind, confidence, visual, audio, semantic) VALUES (?1, ?2, 'exact', 100, 1, 1, 1)",
             params![a, b],
@@ -321,6 +397,11 @@ pub fn dupes_for(conn: &Connection, card_id: i64) -> AppResult<Vec<DupeView>> {
     let deck = db::get_setting(conn, "deck_path")?.unwrap_or_default();
     let table = db::get_setting(conn, "table_path")?.unwrap_or_default();
     let Some(card) = deck::cards(conn, &[card_id])?.into_iter().next() else { return Ok(Vec::new()) };
+    let scope = Scope::deck_only(conn)?;
+    if scope == Scope::Off {
+        return Ok(Vec::new());
+    }
+    let inside = path_set(&scope_files(conn, &scope)?);
     type Row = (String, String, String, i64, Option<i64>, [Option<f64>; 3]);
     let rows: Vec<Row> = conn
         .prepare(
@@ -338,7 +419,7 @@ pub fn dupes_for(conn: &Connection, card_id: i64) -> AppResult<Vec<DupeView>> {
         let offset = offset.map(|o| if mine { o } else { -o });
         let other = if mine { b } else { a };
         let p = PathBuf::from(&other);
-        if !p.is_file() || same_series(conn, &deck, &card.path, &other) {
+        if !inside.contains(&other.to_lowercase()) || !p.is_file() || same_series(conn, &deck, &card.path, &other) {
             continue;
         }
         let (copy, width, height, duration_ms) = copy_of(conn, &other, &deck)?;
@@ -399,6 +480,8 @@ mod tests {
         db::init(&conn).unwrap();
         db::set_setting(&conn, "deck_path", &deck.to_string_lossy()).unwrap();
         db::set_setting(&conn, "table_path", &table.to_string_lossy()).unwrap();
+        db::set_setting(&conn, "dupes_enabled", "1").unwrap();
+        db::set_setting(&conn, "dupes_scope", "all").unwrap();
         conn.execute("INSERT INTO pile(table_path, name, ord) VALUES (?1, 'Музыка', 0)", params![table.to_string_lossy()])
             .unwrap();
         for (i, n) in ["a.mp4", "b.mp4", "c.mp4", "d.mp4"].iter().enumerate() {
@@ -451,6 +534,8 @@ mod tests {
         db::init(&conn).unwrap();
         db::set_setting(&conn, "deck_path", &deck.to_string_lossy()).unwrap();
         db::set_setting(&conn, "table_path", &table.to_string_lossy()).unwrap();
+        db::set_setting(&conn, "dupes_enabled", "1").unwrap();
+        db::set_setting(&conn, "dupes_scope", "all").unwrap();
         conn.execute("INSERT INTO pile(table_path, name, ord) VALUES (?1, 'Музыка', 0)", params![table.to_string_lossy()]).unwrap();
         conn.execute(
             "INSERT INTO card(deck_path, file_name, size, mtime, position) VALUES (?1, 'a.mp4', 4, 0, 0)",
@@ -469,6 +554,81 @@ mod tests {
         assert_eq!(pile_place(&table.join("Музыка").join("f.mp4"), &table.to_string_lossy()), Some(("Музыка".into(), None)));
         assert_eq!(pile_place(&deck.join("a.mp4"), &table.to_string_lossy()), None);
     }
+
+    #[test]
+    fn scope_decides_what_is_searched_and_shown() {
+        let dir = tempfile::tempdir().unwrap();
+        let deck = dir.path().join("deck");
+        let table = dir.path().join("table");
+        fs::create_dir_all(&deck).unwrap();
+        fs::create_dir_all(table.join("Мемы")).unwrap();
+        fs::write(deck.join("a.mp4"), b"same").unwrap();
+        fs::write(deck.join("b.mp4"), b"same").unwrap();
+        fs::write(table.join("Мемы").join("e.mp4"), b"same").unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        db::init(&conn).unwrap();
+        db::set_setting(&conn, "deck_path", &deck.to_string_lossy()).unwrap();
+        db::set_setting(&conn, "table_path", &table.to_string_lossy()).unwrap();
+        conn.execute("INSERT INTO pile(table_path, name, ord) VALUES (?1, 'Мемы', 0)", params![table.to_string_lossy()]).unwrap();
+        for (i, n) in ["a.mp4", "b.mp4"].iter().enumerate() {
+            conn.execute(
+                "INSERT INTO card(deck_path, file_name, size, mtime, position) VALUES (?1, ?2, 4, 0, ?3)",
+                params![deck.to_string_lossy(), n, i as f64],
+            )
+            .unwrap();
+        }
+        assert_eq!(Scope::current(&conn).unwrap(), Scope::Off);
+        assert!(files(&conn).unwrap().is_empty());
+        assert!(!refresh_exact(&conn).unwrap());
+        assert_eq!(printed(&conn).unwrap(), (0, 0));
+
+        db::set_setting(&conn, "dupes_enabled", "1").unwrap();
+        db::set_setting(&conn, "dupes_scope", "all").unwrap();
+        assert!(refresh_exact(&conn).unwrap());
+        let g = groups(&conn).unwrap();
+        assert_eq!((g.scope, g.groups.len(), g.groups[0].items.len()), ("all", 1, 3));
+
+        db::set_setting(&conn, "dupes_scope", "deck").unwrap();
+        let g = groups(&conn).unwrap();
+        assert_eq!((g.scope, g.groups.len(), g.groups[0].items.len(), g.total), ("deck", 1, 2, 2));
+        assert_eq!(dupes_for(&conn, 1).unwrap().len(), 1);
+        assert!(!refresh_exact(&conn).unwrap());
+
+        db::set_setting(&conn, "dupes_scope", "all").unwrap();
+        assert_eq!(groups(&conn).unwrap().groups[0].items.len(), 3);
+
+        conn.execute("DELETE FROM settings WHERE key = 'dupes_enabled'", []).unwrap();
+        assert_eq!(groups(&conn).unwrap().groups.len(), 0);
+        assert!(dupes_for(&conn, 1).unwrap().is_empty());
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM dupe", [], |r| r.get::<_, i64>(0)).unwrap(), 3);
+    }
+
+    #[test]
+    fn search_finds_copy_in_outside_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let table = dir.path().join("table");
+        let ext = dir.path().join("ext");
+        fs::create_dir_all(table.join("Мемы")).unwrap();
+        fs::create_dir_all(&ext).unwrap();
+        fs::write(table.join("Мемы").join("e.mp4"), b"same").unwrap();
+        fs::write(ext.join("x.mp4"), b"same").unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        db::init(&conn).unwrap();
+        db::set_setting(&conn, "table_path", &table.to_string_lossy()).unwrap();
+        search::start(
+            &conn,
+            search::SearchSpec { piles: vec!["Мемы".into()], folders: vec![ext.to_string_lossy().into()], ..Default::default() },
+        )
+        .unwrap();
+        assert!(refresh_exact(&conn).unwrap());
+        let g = groups(&conn).unwrap();
+        assert_eq!((g.scope, g.groups.len()), ("search", 1));
+        let item = g.groups[0].items.iter().find(|i| i.place == "folder").unwrap();
+        assert_eq!(item.folder.as_deref(), Some(ext.to_string_lossy().as_ref()));
+        assert_eq!(g.search.as_ref().map(|s| s.files), Some(2));
+        search::clear(&conn).unwrap();
+        assert!(groups(&conn).unwrap().groups.is_empty());
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -477,6 +637,8 @@ pub struct GroupItem {
     path: String,
     #[serde(rename = "where")]
     place: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    folder: Option<String>,
     pile_name: Option<String>,
     pile_sub: Option<String>,
     card_id: Option<i64>,
@@ -505,6 +667,8 @@ pub struct Groups {
     groups: Vec<Group>,
     printed: i64,
     total: i64,
+    scope: &'static str,
+    search: Option<search::Summary>,
 }
 
 const GROUP_MIN: i64 = 50;
@@ -512,12 +676,28 @@ const GROUP_MIN: i64 = 50;
 pub fn groups(conn: &Connection) -> AppResult<Groups> {
     let deck = db::get_setting(conn, "deck_path")?.unwrap_or_default();
     let table = db::get_setting(conn, "table_path")?.unwrap_or_default();
+    let scope = Scope::current(conn)?;
+    let all = scope_files(conn, &scope)?;
+    let (printed, total) = printed_of(conn, &all)?;
+    let inside = path_set(&all);
+    let search = match &scope {
+        Scope::Search(spec) => Some(search::Summary {
+            piles: spec.piles.clone(),
+            deck: spec.deck,
+            folders: spec.folders.clone(),
+            skipped: spec.skipped.clone(),
+            state: spec.state.clone(),
+            files: all.len(),
+        }),
+        _ => None,
+    };
     let rows: Vec<(String, String, String, i64, Option<i64>)> = conn
         .prepare("SELECT a, b, kind, confidence, offset_ms FROM dupe WHERE confidence >= ?1")?
         .query_map(params![GROUP_MIN], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
         .collect::<Result<_, _>>()?;
     let rows: Vec<_> = rows
         .into_iter()
+        .filter(|(a, b, ..)| inside.contains(&a.to_lowercase()) && inside.contains(&b.to_lowercase()))
         .filter(|(a, b, ..)| Path::new(a).is_file() && Path::new(b).is_file() && !same_series(conn, &deck, a, b))
         .collect();
     let mut index: HashMap<String, usize> = HashMap::new();
@@ -573,12 +753,15 @@ pub fn groups(conn: &Connection) -> AppResult<Groups> {
             .into_iter()
             .enumerate()
             .map(|(i, (path, copy, width, height, duration_ms))| {
-                let (pile_name, pile_sub) =
-                    copy.in_pile.then(|| pile_place(Path::new(&path), &table)).flatten().map(|(n, s)| (Some(n), s)).unwrap_or_default();
+                let spot = copy.in_pile.then(|| pile_place(Path::new(&path), &table)).flatten();
+                let place = if !copy.in_pile { "deck" } else if spot.is_some() { "pile" } else { "folder" };
+                let folder = (place == "folder").then(|| Path::new(&path).parent().map(|d| d.to_string_lossy().into_owned())).flatten();
+                let (pile_name, pile_sub) = spot.map(|(n, s)| (Some(n), s)).unwrap_or_default();
                 GroupItem {
                     pile_name,
                     pile_sub,
-                    place: if copy.in_pile { "pile" } else { "deck" },
+                    place,
+                    folder,
                     card_id: copy.card_id,
                     duration_ms,
                     width,
@@ -601,16 +784,18 @@ pub fn groups(conn: &Connection) -> AppResult<Groups> {
         });
     }
     out.sort_by_key(|g| (g.kind != "exact", -g.confidence));
-    let (printed, total) = printed(conn)?;
-    Ok(Groups { groups: out, printed, total })
+    Ok(Groups { groups: out, printed, total, scope: scope.name(), search })
 }
 
 pub fn printed(conn: &Connection) -> rusqlite::Result<(i64, i64)> {
+    printed_of(conn, &files(conn)?)
+}
+
+fn printed_of(conn: &Connection, all: &[FileInfo]) -> rusqlite::Result<(i64, i64)> {
     let known: HashMap<String, (i64, i64)> = conn
         .prepare("SELECT path, size, mtime FROM fingerprint WHERE state != 'new'")?
         .query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?
         .collect::<Result<_, _>>()?;
-    let all = files(conn)?;
     let done = all.iter().filter(|f| known.get(&f.path) == Some(&(f.size, f.mtime))).count();
     Ok((done as i64, all.len() as i64))
 }

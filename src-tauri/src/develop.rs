@@ -27,13 +27,6 @@ pub static HINTS_FAILED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Named {
-    name: String,
-    card: Option<deck::CardView>,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Status {
     done: i64,
     total: i64,
@@ -45,7 +38,8 @@ pub struct Status {
     stage: &'static str,
     speed: f64,
     ready: bool,
-    pair: Option<Vec<Named>>,
+    scope: &'static str,
+    search: bool,
 }
 
 #[cfg(windows)]
@@ -234,7 +228,15 @@ pub fn status(conn: &Connection, paused: bool, printed: (i64, i64)) -> rusqlite:
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
     let hints = hints::enabled(conn) && !HINTS_FAILED.load(Ordering::Relaxed);
-    let stage = if done < total {
+    let scope = dupes::Scope::current(conn)?;
+    let search = matches!(scope, dupes::Scope::Search(_));
+    let stage = if let dupes::Scope::Search(spec) = &scope {
+        if spec.state == "running" {
+            "dupes"
+        } else {
+            "done"
+        }
+    } else if done < total {
         "frames"
     } else if printed.0 < printed.1 {
         "dupes"
@@ -254,22 +256,9 @@ pub fn status(conn: &Connection, paused: bool, printed: (i64, i64)) -> rusqlite:
         stage,
         speed: 0.0,
         ready: stage == "done",
-        pair: None,
+        scope: scope.name(),
+        search,
     })
-}
-
-fn named(conn: &Connection, path: &str) -> Named {
-    let p = Path::new(path);
-    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
-    let id: Option<i64> = conn
-        .query_row(
-            "SELECT id FROM card WHERE (deck_path = ?1 AND file_name = ?2 COLLATE NOCASE) OR current_path = ?3 LIMIT 1",
-            params![p.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default(), name, path],
-            |r| r.get(0),
-        )
-        .ok();
-    let card = id.and_then(|id| deck::cards(conn, &[id]).ok()).and_then(|mut v| v.pop());
-    Named { name, card }
 }
 
 struct Report {
@@ -284,7 +273,7 @@ impl Report {
         Report { at: Instant::now() - Duration::from_secs(1), dirty: false, stage: "", samples: VecDeque::new() }
     }
 
-    fn tick(&mut self, app: &AppHandle, conn: &Connection, paused: bool, printed: &mut Printed, pair: Option<&(String, Option<String>)>, force: bool) {
+    fn tick(&mut self, app: &AppHandle, conn: &Connection, paused: bool, printed: &mut Printed, force: bool) {
         self.dirty = true;
         if !force && self.at.elapsed() < Duration::from_millis(250) {
             return;
@@ -310,9 +299,6 @@ impl Report {
             if dt >= 1.0 && !paused {
                 s.speed = (b.1 - a.1).max(0) as f64 / dt;
             }
-        }
-        if s.stage == "dupes" {
-            s.pair = pair.map(|(a, b)| std::iter::once(a).chain(b).map(|p| named(conn, p)).collect());
         }
         let _ = app.emit("develop://progress", s);
         self.at = now;
@@ -357,8 +343,8 @@ impl Printed {
         self.value
     }
 
-    fn bump(&mut self) {
-        self.value.0 = (self.value.0 + 1).min(self.value.1);
+    fn bump(&mut self, n: usize) {
+        self.value.0 = (self.value.0 + n as i64).min(self.value.1);
     }
 
     fn reset(&mut self) {
@@ -366,7 +352,13 @@ impl Printed {
     }
 }
 
-fn workers() -> usize {
+pub(crate) fn prepare_thread() {
+    lower_priority();
+    #[cfg(windows)]
+    mf::start();
+}
+
+pub(crate) fn workers() -> usize {
     std::thread::available_parallelism().map(|n| n.get() / 2).unwrap_or(2).clamp(2, 4)
 }
 
@@ -652,18 +644,14 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<Atomi
         let mut developed: Vec<i64> = Vec::new();
         let mut series_dirty = false;
         let mut series_at = Instant::now();
+        let mut scope_name = "";
         loop {
             let is_paused = paused.load(Ordering::Relaxed);
-            let exact_every = Duration::from_secs(if was_busy { 30 } else { 3 });
-            if !is_paused && dupes_at.elapsed() > exact_every {
-                match dupes::refresh_exact(&conn) {
-                    Ok(true) => {
-                        let _ = app.emit("dupes://changed", ());
-                    }
-                    Ok(false) => {}
-                    Err(e) => eprintln!("dupes: {e}"),
-                }
-                dupes_at = Instant::now();
+            let scope = dupes::Scope::work(&conn).unwrap_or(dupes::Scope::Off);
+            if scope.name() != scope_name {
+                scope_name = scope.name();
+                printed.reset();
+                dupes_at = Instant::now() - Duration::from_secs(60);
             }
             let jobs = if is_paused { Vec::new() } else { next(&conn, workers()).unwrap_or_default() };
             let idle = jobs.is_empty();
@@ -696,30 +684,55 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<Atomi
                 last_emit = Instant::now();
             }
             if !idle {
-                report.tick(&app, &conn, false, &mut printed, None, false);
+                report.tick(&app, &conn, false, &mut printed, false);
                 continue;
+            }
+            let exact_every = Duration::from_secs(if was_busy { 30 } else { 3 });
+            if !is_paused && scope != dupes::Scope::Off && dupes_at.elapsed() > exact_every {
+                match dupes::refresh_exact(&conn) {
+                    Ok(true) => {
+                        let _ = app.emit("dupes://changed", ());
+                    }
+                    Ok(false) => {}
+                    Err(e) => eprintln!("dupes: {e}"),
+                }
+                dupes_at = Instant::now();
             }
             if !is_paused {
                 match printer.step(&conn, learner.engine(&cache)) {
-                    Ok(Some(changed)) => {
+                    Ok(Some((n, changed))) => {
                         if changed {
                             let _ = app.emit("dupes://changed", ());
                         }
-                        printed.bump();
-                        report.tick(&app, &conn, false, &mut printed, printer.last.as_ref(), false);
+                        printed.bump(n);
+                        report.tick(&app, &conn, false, &mut printed, false);
                         continue;
                     }
-                    Ok(None) => {}
+                    Ok(None) => {
+                        if let dupes::Scope::Search(mut spec) = scope {
+                            if spec.state == "running" {
+                                if let Err(e) = dupes::refresh_exact(&conn) {
+                                    eprintln!("dupes: {e}");
+                                }
+                                spec.state = "done".into();
+                                let _ = dupes::search::save(&conn, &spec);
+                                let _ = app.emit("dupes://changed", ());
+                                printed.reset();
+                                report.tick(&app, &conn, false, &mut printed, true);
+                                continue;
+                            }
+                        }
+                    }
                     Err(e) => eprintln!("dupes: {e}"),
                 }
             }
             if !is_paused && learner.step(&app, &conn, &cache) {
-                report.tick(&app, &conn, false, &mut printed, None, false);
+                report.tick(&app, &conn, false, &mut printed, false);
                 continue;
             }
             if was_busy || report.dirty || wake.swap(false, Ordering::Relaxed) {
                 printed.reset();
-                report.tick(&app, &conn, is_paused, &mut printed, None, true);
+                report.tick(&app, &conn, is_paused, &mut printed, true);
                 was_busy = false;
             }
             std::thread::sleep(Duration::from_millis(400));
@@ -781,6 +794,30 @@ mod tests {
         assert_eq!(cache_size(&cache), (0, 0));
         let stage = |id: i64| conn.query_row("SELECT stage FROM card WHERE id = ?1", params![id], |r| r.get::<_, String>(0)).unwrap();
         assert_eq!((stage(1).as_str(), stage(2).as_str(), stage(3).as_str()), ("new", "meta", "broken"));
+    }
+
+    #[test]
+    fn dupes_stage_only_when_search_is_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let deck = dir.path().join("deck");
+        fs::create_dir_all(&deck).unwrap();
+        fs::write(deck.join("a.mp4"), b"a").unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        db::init(&conn).unwrap();
+        db::set_setting(&conn, "deck_path", &deck.to_string_lossy()).unwrap();
+        conn.execute(
+            "INSERT INTO card(deck_path, file_name, size, mtime, position, stage, frames) VALUES (?1, 'a.mp4', 1, 0, 0, 'frames', 8)",
+            params![deck.to_string_lossy()],
+        )
+        .unwrap();
+        let s = status(&conn, false, dupes::printed(&conn).unwrap()).unwrap();
+        assert_eq!((s.stage, s.scope, s.ready, s.prints), ("done", "off", true, 0));
+        db::set_setting(&conn, "dupes_enabled", "1").unwrap();
+        let s = status(&conn, false, dupes::printed(&conn).unwrap()).unwrap();
+        assert_eq!((s.stage, s.scope, s.ready, s.prints), ("dupes", "deck", false, 1));
+        dupes::search::start(&conn, dupes::search::SearchSpec { deck: true, ..Default::default() }).unwrap();
+        let s = status(&conn, false, dupes::printed(&conn).unwrap()).unwrap();
+        assert_eq!((s.stage, s.search), ("dupes", true));
     }
 
     #[test]

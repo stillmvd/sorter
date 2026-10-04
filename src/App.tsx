@@ -6,6 +6,7 @@ import { ExplorerBar } from "./components/deck/ExplorerBar";
 import { Develop } from "./components/screens/Develop";
 import { JournalScreen } from "./components/screens/Journal";
 import { PilesScreen } from "./components/screens/Piles";
+import type { DupesSetting } from "./components/screens/DupesStep";
 import { SettingsScreen } from "./components/screens/Settings";
 import { Start } from "./components/screens/Start";
 import { errorText, ipc, onOpenFolder, type AppState } from "./lib/ipc";
@@ -15,7 +16,9 @@ export default function App() {
   const [failure, setFailure] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
   const [home, setHome] = useState(false);
-  const [developView, setDevelopView] = useState(false);
+  const [develop, setDevelop] = useState<"deck" | "dupes" | "search" | null>(null);
+  const revert = useRef<DupesSetting | null>(null);
+  const developView = develop !== null;
   const [screen, setScreen] = useState<"deck" | "piles" | "journal" | "settings">("deck");
 
   const reload = useCallback(async () => {
@@ -83,13 +86,38 @@ export default function App() {
       return;
     }
     if (lastDeck.current !== deck) {
-      setDevelopView(!state.developing.ready);
+      setDevelop(state.developing.ready ? null : state.developing.search ? "search" : "deck");
       setScreen("deck");
     }
     lastDeck.current = deck;
   }, [state]);
 
   const back = useCallback(() => void reload().then(() => setScreen("deck")), [reload]);
+
+  const widen = useCallback(
+    (before: DupesSetting) => {
+      revert.current = before;
+      setDevelop("dupes");
+      void reload().then(() => setScreen("deck"));
+    },
+    [reload],
+  );
+
+  const search = useCallback(() => {
+    setDevelop("search");
+    void reload();
+  }, [reload]);
+
+  const cancelDevelop = useCallback(async () => {
+    if (develop === "search") await ipc.searchClear();
+    else if (develop === "dupes" && revert.current) {
+      await ipc.setSetting("dupes_scope", revert.current.scope);
+      await ipc.setSetting("dupes_enabled", revert.current.enabled ? "1" : "0");
+    } else await ipc.cancelDeck();
+    revert.current = null;
+    await reload();
+    setDevelop(null);
+  }, [develop, reload]);
 
   const ready = !!state?.settings.deck_path && !!state?.settings.table_path;
   const showStart = state && (!ready || home || state.missing.length > 0 || (!started && !state.settings.mode));
@@ -110,14 +138,18 @@ export default function App() {
           }}
         />
       )}
-      {state && !showStart && ready && developView && <Develop
+      {state && !showStart && ready && develop && (
+        <Develop
           state={state}
-          onDone={() => setDevelopView(false)}
-          onCancel={() => void ipc.cancelDeck().then(() => {
-            setDevelopView(false);
-            return reload();
-          })}
-        />}
+          purpose={develop}
+          onDone={() => {
+            revert.current = null;
+            setDevelop(null);
+            void reload();
+          }}
+          onCancel={() => void cancelDevelop()}
+        />
+      )}
       {state && !showStart && ready && !developView && screen === "piles" && (
         <PilesScreen table={state.settings.table_path ?? ""} onBack={back} />
       )}
@@ -125,7 +157,7 @@ export default function App() {
         <JournalScreen cacheDir={state.cacheDir} deckPath={state.settings.deck_path ?? ""} onBack={back} />
       )}
       {state && !showStart && ready && !developView && screen === "settings" && (
-        <SettingsScreen state={state} onChange={reload} onBack={back} />
+        <SettingsScreen state={state} onChange={reload} onBack={back} onWiden={widen} />
       )}
       {state && !showStart && ready && !developView && screen === "deck" && (
         <DeckScreen
@@ -146,6 +178,8 @@ export default function App() {
           onJournal={() => setScreen("journal")}
           onSettings={() => setScreen("settings")}
           onHome={() => setHome(true)}
+          onWiden={widen}
+          onSearch={search}
         />
       )}
     </div>

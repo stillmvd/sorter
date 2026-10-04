@@ -64,9 +64,12 @@ export type Hints = { enabled: boolean; ready: boolean; examples: number; hints:
 
 export type DupeKind = "exact" | "same" | "trim" | "crop";
 
+export type Place = "deck" | "pile" | "folder";
+
 export type GroupItem = {
   path: string;
-  where: "deck" | "pile";
+  where: Place;
+  folder?: string;
   pileName: string | null;
   pileSub: string | null;
   cardId: number | null;
@@ -87,11 +90,26 @@ export type DupeGroup = {
   pairs: [string, string][];
 };
 
-export type DupeGroups = { groups: DupeGroup[]; printed: number; total: number };
+export type DupesScope = "off" | "deck" | "all" | "search";
+
+export type SearchSummary = {
+  piles: string[];
+  deck: boolean;
+  folders: string[];
+  skipped: string[];
+  state: "running" | "done";
+  files: number;
+};
+
+export type DupeGroups = { groups: DupeGroup[]; printed: number; total: number; scope: DupesScope; search: SearchSummary | null };
+
+export type DupesEstimate = { deck: number; table: number; piles: number; pending: number; minutes: number };
+
+export type SearchPreview = { total: number; roots: { path: string; files: number; error?: string | null }[] };
 
 export type DupeView = {
   path: string;
-  where: "deck" | "pile";
+  where: Place;
   pileName: string | null;
   pileSub: string | null;
   cardId: number | null;
@@ -113,8 +131,11 @@ export type DupeView = {
 export const pileLabel = (d: { pileName: string | null; pileSub: string | null }) =>
   d.pileSub ? `${d.pileName} / ${d.pileSub}` : (d.pileName ?? "");
 
+export const placeLabel = (d: GroupItem) =>
+  d.where === "pile" ? `в стопке «${pileLabel(d)}»` : d.where === "folder" ? `в папке ${d.folder ?? ""}` : "в колоде";
+
 export type Settings = Partial<
-  Record<"deck_path" | "table_path" | "hints_enabled" | "theme" | "muted" | "mode" | "volume" | "updates" | "kind_filter" | "series_rest", string>
+  Record<"deck_path" | "table_path" | "hints_enabled" | "theme" | "muted" | "mode" | "volume" | "updates" | "kind_filter" | "series_rest" | "dupes_enabled" | "dupes_scope" | "dupe_search", string>
 >;
 
 export type KindCounts = { left: number; placed: number };
@@ -130,7 +151,8 @@ export type Developing = {
   stage: "frames" | "dupes" | "hints" | "done";
   speed: number;
   ready: boolean;
-  pair: { name: string; card: Card | null }[] | null;
+  scope: DupesScope;
+  search: boolean;
 };
 
 export type AppState = {
@@ -222,4 +244,9 @@ export const ipc = {
   replaceCopy: (cardId: number, worsePath: string) =>
     invoke<{ move: Move; piles: Pile[] }>("replace_copy", { cardId, worsePath }),
   developControl: (pause: boolean) => invoke<void>("develop_control", { pause }),
+  dupesEstimate: (scope: "deck" | "all") => invoke<DupesEstimate>("dupes_estimate", { scope }),
+  searchPreview: (piles: string[], deck: boolean, folders: string[]) =>
+    invoke<SearchPreview>("search_preview", { piles, deck, folders }),
+  searchStart: (piles: string[], deck: boolean, folders: string[]) => invoke<void>("search_start", { piles, deck, folders }),
+  searchClear: () => invoke<void>("search_clear"),
 };

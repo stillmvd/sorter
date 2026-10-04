@@ -7,6 +7,7 @@ import { Button } from "../ui/Button";
 import { BackButton, Heading } from "../ui/PageHeader";
 import { Segment } from "../ui/Segment";
 import { Toggle } from "../ui/Toggle";
+import { DupesStep, widened, type DupesSetting } from "./DupesStep";
 import { UpdatesTile } from "./UpdatesTile";
 
 type Theme = "system" | "dark" | "light";
@@ -34,7 +35,17 @@ function Tile({ title, note, children, wide = false }: { title: string; note: st
   );
 }
 
-export function SettingsScreen({ state, onChange, onBack }: { state: AppState; onChange: () => Promise<void>; onBack: () => void }) {
+export function SettingsScreen({
+  state,
+  onChange,
+  onBack,
+  onWiden,
+}: {
+  state: AppState;
+  onChange: () => Promise<void>;
+  onBack: () => void;
+  onWiden: (before: DupesSetting) => void;
+}) {
   const [errors, setErrors] = useState<{ deck?: string; table?: string }>({});
   const [cache, setCache] = useState<{ bytes: number; cards: number } | null>(null);
   const [freed, setFreed] = useState<number | null>(null);
@@ -138,6 +149,10 @@ export function SettingsScreen({ state, onChange, onBack }: { state: AppState; o
             )}
           </p>
         </section>
+
+        <div className="col-span-2">
+          <DupesStep state={state} onChanged={(before, after) => (widened(before, after) ? onWiden(before) : void onChange())} />
+        </div>
 
         <Tile
           wide

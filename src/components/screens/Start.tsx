@@ -5,6 +5,7 @@ import { plural } from "../../lib/plural";
 import { Button } from "../ui/Button";
 import { Heading } from "../ui/PageHeader";
 import { Toggle } from "../ui/Toggle";
+import { DupesStep } from "./DupesStep";
 
 const gb = (bytes: number) =>
   bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1).replace(".", ",")} ГБ` : `${Math.round(bytes / 1024 ** 2)} МБ`;
@@ -69,7 +70,7 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
 
   return (
     <main className="mx-2 mb-2 flex min-h-0 flex-1 gap-2">
-      <section className="flex flex-1 flex-col gap-7 rounded-[28px] bg-cosmic px-16 py-14">
+      <section className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto rounded-[28px] bg-cosmic px-16 py-10 [--scroll-inset:28px]">
         <div className="flex flex-col gap-3">
           <Heading light="Разложим" bold="видео" size={56} />
           <p className="m-0 max-w-[560px] text-[15px] leading-[1.55] text-dim">
@@ -77,7 +78,7 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
             переносятся, только когда ты сам кладёшь карту.
           </p>
         </div>
-        <div className="flex max-w-[760px] flex-col gap-3">
+        <div className="flex max-w-[760px] flex-col gap-2.5">
           <Step
             n={1}
             done={!!deck}
@@ -128,6 +129,7 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
               }}
             />
           </div>
+          <DupesStep state={state} n={4} onChanged={() => onChange()} />
         </div>
         <div className="flex-1" />
         <div className="flex items-center gap-3">

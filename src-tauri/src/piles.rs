@@ -38,16 +38,16 @@ fn folders(table: &Path) -> AppResult<Vec<String>> {
 pub fn sync(conn: &Connection, table: &str) -> AppResult<()> {
     let on_disk = folders(Path::new(table))?;
     let lower: HashSet<String> = on_disk.iter().map(|n| n.to_lowercase()).collect();
-    let rows: Vec<(i64, String)> = conn
-        .prepare("SELECT id, name FROM pile WHERE table_path = ?1 AND is_trash = 0")?
-        .query_map(params![table], |r| Ok((r.get(0)?, r.get(1)?)))?
+    let rows: Vec<(i64, String, bool)> = conn
+        .prepare("SELECT id, name, exists_on_disk FROM pile WHERE table_path = ?1 AND is_trash = 0")?
+        .query_map(params![table], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<Result<_, _>>()?;
-    let known: HashSet<String> = rows.iter().map(|(_, n)| n.to_lowercase()).collect();
-    for (id, name) in &rows {
-        conn.execute(
-            "UPDATE pile SET exists_on_disk = ?2 WHERE id = ?1",
-            params![id, lower.contains(&name.to_lowercase())],
-        )?;
+    let known: HashSet<String> = rows.iter().map(|(_, n, _)| n.to_lowercase()).collect();
+    for (id, name, was) in &rows {
+        let now = lower.contains(&name.to_lowercase());
+        if now != *was {
+            conn.execute("UPDATE pile SET exists_on_disk = ?2 WHERE id = ?1", params![id, now])?;
+        }
     }
     for name in on_disk.iter().filter(|n| !known.contains(&n.to_lowercase())) {
         let used: HashSet<String> = conn
@@ -61,10 +61,13 @@ pub fn sync(conn: &Connection, table: &str) -> AppResult<()> {
             params![table, name, key],
         )?;
     }
-    conn.execute(
-        "INSERT OR IGNORE INTO pile(table_path, name, key, is_trash, ord) VALUES (?1, ?2, ?3, 1, ?4)",
-        params![table, TRASH_NAME, TRASH_KEY, TRASH_ORD],
-    )?;
+    let trash = conn.prepare("SELECT 1 FROM pile WHERE table_path = ?1 AND is_trash = 1")?.exists(params![table])?;
+    if !trash {
+        conn.execute(
+            "INSERT OR IGNORE INTO pile(table_path, name, key, is_trash, ord) VALUES (?1, ?2, ?3, 1, ?4)",
+            params![table, TRASH_NAME, TRASH_KEY, TRASH_ORD],
+        )?;
+    }
     Ok(())
 }
 

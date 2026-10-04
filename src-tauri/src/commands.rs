@@ -23,9 +23,23 @@ pub struct AppState {
     pub incoming: Mutex<Option<String>>,
 }
 
-const USER_KEYS: [&str; 8] = ["hints_enabled", "theme", "muted", "mode", "volume", "updates", "kind_filter", "series_rest"];
-const SETTING_KEYS: [&str; 10] =
-    ["deck_path", "table_path", "hints_enabled", "theme", "muted", "mode", "volume", "updates", "kind_filter", "series_rest"];
+const USER_KEYS: [&str; 10] =
+    ["hints_enabled", "theme", "muted", "mode", "volume", "updates", "kind_filter", "series_rest", "dupes_enabled", "dupes_scope"];
+const SETTING_KEYS: [&str; 13] = [
+    "deck_path",
+    "table_path",
+    "hints_enabled",
+    "theme",
+    "muted",
+    "mode",
+    "volume",
+    "updates",
+    "kind_filter",
+    "series_rest",
+    "dupes_enabled",
+    "dupes_scope",
+    "dupe_search",
+];
 
 impl AppState {
     pub fn conn(&self) -> MutexGuard<'_, Connection> {
@@ -201,9 +215,22 @@ pub fn set_setting_cmd(app: tauri::AppHandle, state: State<AppState>, key: Strin
     if !USER_KEYS.contains(&key.as_str()) {
         return Err(AppError::new("BAD_SETTING", "Такой настройки нет."));
     }
-    set_setting(&state.conn(), &key, &value)?;
+    let conn = state.conn();
+    match key.as_str() {
+        "dupes_enabled" if value != "1" => {
+            conn.execute("DELETE FROM settings WHERE key = 'dupes_enabled'", [])?;
+        }
+        "dupes_scope" if value != "deck" && value != "all" => {
+            return Err(AppError::new("BAD_SETTING", "Такой области поиска нет."));
+        }
+        _ => set_setting(&conn, &key, &value)?,
+    }
     if key == "updates" {
         crate::updates::toggled(&app);
+    }
+    if key.starts_with("dupes_") {
+        state.wake.store(true, Ordering::Relaxed);
+        let _ = app.emit("dupes://changed", ());
     }
     Ok(())
 }
@@ -472,6 +499,66 @@ pub fn split_series(app: AppHandle, state: State<AppState>, series_id: i64) -> A
 #[tauri::command(async)]
 pub fn dupe_groups(state: State<AppState>) -> AppResult<dupes::Groups> {
     dupes::groups(&state.read()?)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Estimate {
+    deck: usize,
+    table: usize,
+    piles: i64,
+    pending: usize,
+    minutes: i64,
+}
+
+#[tauri::command(async)]
+pub fn dupes_estimate(state: State<AppState>, scope: String) -> AppResult<Estimate> {
+    let conn = state.read()?;
+    let deck = dupes::scope_files(&conn, &dupes::Scope::Deck)?.len();
+    let all = dupes::scope_files(&conn, &dupes::Scope::All)?;
+    let table = all.len().saturating_sub(deck);
+    let chosen = if scope == "all" { all } else { dupes::scope_files(&conn, &dupes::Scope::Deck)? };
+    let pending = dupes::near::unprinted(&conn, chosen)?;
+    let (video, photo) = dupes::near::rates(&conn)?;
+    let ms: i64 = pending.iter().map(|f| if deck::photo_name(&f.path) { photo } else { video }).sum();
+    let piles = match get_setting(&conn, "table_path")? {
+        Some(t) => conn.query_row(
+            "SELECT COUNT(*) FROM pile WHERE table_path = ?1 AND is_trash = 0 AND exists_on_disk = 1",
+            params![t],
+            |r| r.get(0),
+        )?,
+        None => 0,
+    };
+    Ok(Estimate { deck, table, piles, pending: pending.len(), minutes: (ms + 59_999) / 60_000 })
+}
+
+fn search_spec(piles: Vec<String>, deck: bool, folders: Vec<String>) -> dupes::search::SearchSpec {
+    dupes::search::SearchSpec { piles, deck, folders, ..Default::default() }
+}
+
+#[tauri::command(async)]
+pub fn search_preview(state: State<AppState>, piles: Vec<String>, deck: bool, folders: Vec<String>) -> AppResult<dupes::search::Preview> {
+    Ok(dupes::search::preview(&state.read()?, &search_spec(piles, deck, folders))?)
+}
+
+#[tauri::command]
+pub fn search_start(app: AppHandle, state: State<AppState>, piles: Vec<String>, deck: bool, folders: Vec<String>) -> AppResult<()> {
+    let spec = search_spec(piles, deck, folders);
+    if spec.is_empty() {
+        return Err(AppError::new("EMPTY_SEARCH", "Отметь хотя бы одну стопку, колоду или папку."));
+    }
+    dupes::search::start(&state.conn(), spec)?;
+    state.wake.store(true, Ordering::Relaxed);
+    let _ = app.emit("dupes://changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn search_clear(app: AppHandle, state: State<AppState>) -> AppResult<()> {
+    dupes::search::clear(&state.conn())?;
+    state.wake.store(true, Ordering::Relaxed);
+    let _ = app.emit("dupes://changed", ());
+    Ok(())
 }
 
 #[tauri::command(async)]

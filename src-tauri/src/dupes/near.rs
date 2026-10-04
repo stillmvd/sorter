@@ -1,10 +1,12 @@
 use super::matcher::{self, Scores, AUDIO_HAM, FRAME_HAM};
 use super::print::{self, Print, FPS};
 use super::index::Index;
-use super::{files, FileInfo};
+#[cfg(test)]
+use super::files;
+use super::{scope_files, FileInfo, Scope};
 use crate::hints::{self, Engine};
 use rusqlite::{params, Connection, OptionalExtension};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -170,17 +172,26 @@ pub fn save_print(conn: &Connection, f: &FileInfo, p: Option<&Print>, vectors: &
     Ok(())
 }
 
-pub fn next_file(conn: &Connection) -> rusqlite::Result<Option<FileInfo>> {
+pub fn unprinted(conn: &Connection, all: Vec<FileInfo>) -> rusqlite::Result<Vec<FileInfo>> {
     let known: HashMap<String, (i64, i64, String)> = conn
         .prepare("SELECT path, size, mtime, state FROM fingerprint")?
         .query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?, r.get(3)?))))?
         .collect::<Result<_, _>>()?;
-    Ok(files(conn)?.into_iter().find(|f| match known.get(&f.path) {
-        Some((size, mtime, state)) => state == "new" || *size != f.size || *mtime != f.mtime,
-        None => true,
-    }))
+    Ok(all
+        .into_iter()
+        .filter(|f| match known.get(&f.path) {
+            Some((size, mtime, state)) => state == "new" || *size != f.size || *mtime != f.mtime,
+            None => true,
+        })
+        .collect())
 }
 
+#[cfg(test)]
+pub fn next_file(conn: &Connection) -> rusqlite::Result<Option<FileInfo>> {
+    Ok(unprinted(conn, files(conn)?)?.into_iter().next())
+}
+
+#[cfg(test)]
 pub fn embed(engine: Option<&mut Engine>, p: &Print) -> Vec<Vec<f32>> {
     let Some(engine) = engine else { return Vec::new() };
     let mut out = Vec::with_capacity(p.stills.len());
@@ -193,38 +204,108 @@ pub fn embed(engine: Option<&mut Engine>, p: &Print) -> Vec<Vec<f32>> {
     out
 }
 
+pub fn embed_many(engine: Option<&mut Engine>, prints: &[Option<Print>]) -> Vec<Vec<Vec<f32>>> {
+    let empty = || prints.iter().map(|_| Vec::new()).collect();
+    let Some(engine) = engine else { return empty() };
+    let stills: Vec<image::RgbImage> = prints.iter().flatten().flat_map(|p| p.stills.iter().cloned()).collect();
+    let mut flat = Vec::with_capacity(stills.len());
+    for chunk in stills.chunks(BATCH * 2) {
+        match engine.embed(chunk) {
+            Ok(v) => flat.extend(v),
+            Err(_) => return empty(),
+        }
+    }
+    let mut rest = flat.into_iter();
+    prints.iter().map(|p| p.as_ref().map(|p| rest.by_ref().take(p.stills.len()).collect()).unwrap_or_default()).collect()
+}
+
 const IDLE: Duration = Duration::from_secs(5);
+const RATE_KEYS: [&str; 2] = ["dupes_rate_video_ms", "dupes_rate_photo_ms"];
+const RATE_DEFAULTS: [i64; 2] = [840, 200];
+
+pub fn rates(conn: &Connection) -> rusqlite::Result<(i64, i64)> {
+    let mut out = RATE_DEFAULTS;
+    for (i, key) in RATE_KEYS.iter().enumerate() {
+        if let Some(v) = crate::db::get_setting(conn, key)?.and_then(|v| v.parse().ok()) {
+            out[i] = v;
+        }
+    }
+    Ok((out[0], out[1]))
+}
+
+type Key = (Scope, Option<String>, Option<String>);
+
+fn key(conn: &Connection) -> rusqlite::Result<Key> {
+    Ok((Scope::work(conn)?, crate::db::get_setting(conn, "deck_path")?, crate::db::get_setting(conn, "table_path")?))
+}
 
 pub struct Printer {
     index: Option<Index>,
     version: i64,
     idle_until: Option<Instant>,
-    pub last: Option<(String, Option<String>)>,
+    queue: VecDeque<FileInfo>,
+    key: Option<Key>,
+    rates: [(f64, u32); 2],
+    pub spent: [Duration; 4],
 }
 
 impl Printer {
     pub fn new() -> Self {
-        Printer { index: None, version: -1, idle_until: None, last: None }
+        Printer { index: None, version: -1, idle_until: None, queue: VecDeque::new(), key: None, rates: [(0.0, 0); 2], spent: [Duration::ZERO; 4] }
     }
 
-    pub fn step(&mut self, conn: &Connection, engine: Option<&mut Engine>) -> rusqlite::Result<Option<bool>> {
-        if self.idle_until.is_some_and(|t| Instant::now() < t) {
+    pub fn step(&mut self, conn: &Connection, engine: Option<&mut Engine>) -> rusqlite::Result<Option<(usize, bool)>> {
+        let now = key(conn)?;
+        if self.key.as_ref() != Some(&now) {
+            self.queue.clear();
+            self.idle_until = None;
+            self.key = Some(now.clone());
+        }
+        if now.0 == Scope::Off || self.idle_until.is_some_and(|t| Instant::now() < t) {
             return Ok(None);
         }
-        let Some(file) = next_file(conn)? else {
+        if self.queue.is_empty() {
+            self.queue = unprinted(conn, scope_files(conn, &now.0)?)?.into();
+        }
+        let mut batch = Vec::new();
+        while batch.len() < crate::develop::workers() {
+            let Some(f) = self.queue.pop_front() else { break };
+            if Path::new(&f.path).is_file() {
+                batch.push(f);
+            }
+        }
+        if batch.is_empty() {
             self.idle_until = Some(Instant::now() + IDLE);
             return Ok(None);
-        };
-        self.idle_until = None;
-        self.last = Some((file.path.clone(), None));
-        let deck = crate::db::get_setting(conn, "deck_path")?;
-        let print = print::print(Path::new(&file.path));
-        let vectors = print.as_ref().map(|p| embed(engine, p)).unwrap_or_default();
-        if crate::db::get_setting(conn, "deck_path")? != deck {
-            return Ok(Some(false));
         }
-        save_print(conn, &file, print.as_ref(), &vectors)?;
-        let Some(p) = print else { return Ok(Some(false)) };
+        let started = Instant::now();
+        let prints: Vec<Option<Print>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = batch
+                .iter()
+                .map(|f| {
+                    scope.spawn(move || {
+                        crate::develop::prepare_thread();
+                        print::print(Path::new(&f.path))
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().ok().flatten()).collect()
+        });
+        self.spent[0] += started.elapsed();
+        let t = Instant::now();
+        let vectors = embed_many(engine, &prints);
+        self.spent[1] += t.elapsed();
+        let t = Instant::now();
+        if key(conn)? != now {
+            return Ok(Some((0, false)));
+        }
+        let tx = conn.unchecked_transaction()?;
+        for ((f, p), v) in batch.iter().zip(&prints).zip(&vectors) {
+            save_print(&tx, f, p.as_ref(), v)?;
+        }
+        tx.commit()?;
+        self.spent[2] += t.elapsed();
+        let t = Instant::now();
         let version: i64 = conn.query_row("PRAGMA data_version", [], |r| r.get(0))?;
         match self.index.as_mut() {
             None => self.index = Some(Index::load(conn)?),
@@ -233,30 +314,56 @@ impl Printer {
         }
         self.version = version;
         let index = self.index.as_mut().unwrap();
-        index.remove(&file.path);
-        let me = Entry {
-            path: file.path.clone(),
-            duration_ms: p.duration_ms,
-            frames: p.frames,
-            audio: p.audio,
-            mean: hints::mean(&vectors).unwrap_or_default(),
-            look: p.look,
-        };
-        let audio_set: HashSet<u32> = me.audio.iter().copied().collect();
-        let mut changed = false;
-        for other in index.candidates(&me) {
-            if !Path::new(&other.path).is_file() {
-                continue;
-            }
-            if let Some(pair) = compare(conn, &me, other, &audio_set)? {
-                if pair.confidence >= STORE_MIN {
-                    self.last = Some((me.path.clone(), Some(other.path.clone())));
-                    changed |= store_pair(conn, &me.path, &other.path, &pair)?;
+        let mut found = Vec::new();
+        for ((f, p), v) in batch.iter().zip(prints).zip(vectors) {
+            let Some(p) = p else { continue };
+            index.remove(&f.path);
+            let me = Entry {
+                path: f.path.clone(),
+                duration_ms: p.duration_ms,
+                frames: p.frames,
+                audio: p.audio,
+                mean: hints::mean(&v).unwrap_or_default(),
+                look: p.look,
+            };
+            let audio_set: HashSet<u32> = me.audio.iter().copied().collect();
+            for other in index.candidates(&me) {
+                if !Path::new(&other.path).is_file() {
+                    continue;
+                }
+                if let Some(pair) = compare(conn, &me, other, &audio_set)? {
+                    if pair.confidence >= STORE_MIN {
+                        found.push((me.path.clone(), other.path.clone(), pair));
+                    }
                 }
             }
+            index.insert(me);
         }
-        index.insert(me);
-        Ok(Some(changed))
+        self.spent[3] += t.elapsed();
+        let mut changed = false;
+        if !found.is_empty() {
+            let tx = conn.unchecked_transaction()?;
+            for (a, b, pair) in &found {
+                changed |= store_pair(&tx, a, b, pair)?;
+            }
+            tx.commit()?;
+        }
+        let per = started.elapsed() / batch.len() as u32;
+        for f in &batch {
+            self.learn(conn, crate::deck::photo_name(&f.path), per)?;
+        }
+        Ok(Some((batch.len(), changed)))
+    }
+
+    fn learn(&mut self, conn: &Connection, photo: bool, took: Duration) -> rusqlite::Result<()> {
+        let ms = took.as_millis() as f64;
+        let (rate, n) = &mut self.rates[photo as usize];
+        *rate = if *n == 0 { ms } else { *rate * 0.9 + ms * 0.1 };
+        *n += 1;
+        if *n % 25 == 0 {
+            crate::db::set_setting(conn, RATE_KEYS[photo as usize], &(rate.round() as i64).to_string())?;
+        }
+        Ok(())
     }
 }
 
@@ -422,8 +529,8 @@ mod probe {
         let mut printer = Printer::new();
         let t = std::time::Instant::now();
         let mut n = 0;
-        while let Some(changed) = printer.step(&conn, engine.as_mut()).unwrap() {
-            n += 1;
+        while let Some((k, changed)) = printer.step(&conn, engine.as_mut()).unwrap() {
+            n += k;
             if changed || n % 20 == 0 {
                 println!("{n} {:?} {changed}", t.elapsed());
             }
@@ -437,5 +544,191 @@ mod probe {
             println!("PAIR {}", r.unwrap());
         }
         println!("ИТОГО {n} файлов за {:?}", t.elapsed());
+    }
+
+    #[test]
+    #[ignore]
+    fn bench_dupes_stage() {
+        let (deck, table) = (r"G:\sorter-test\big", r"G:\sorter-test\big-table");
+        if !Path::new(deck).is_dir() {
+            return;
+        }
+        unsafe {
+            let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED);
+            let _ = windows::Win32::Media::MediaFoundation::MFStartup(
+                windows::Win32::Media::MediaFoundation::MF_VERSION,
+                windows::Win32::Media::MediaFoundation::MFSTARTUP_FULL,
+            );
+        }
+        let dir = std::env::temp_dir().join("sorter-bench-dupes");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = Connection::open(dir.join("db.sqlite")).unwrap();
+        crate::db::init(&conn).unwrap();
+        crate::db::set_setting(&conn, "deck_path", deck).unwrap();
+        crate::db::set_setting(&conn, "table_path", table).unwrap();
+        crate::db::set_setting(&conn, "dupes_enabled", "1").unwrap();
+        crate::db::set_setting(&conn, "dupes_scope", "all").unwrap();
+        crate::deck::sync(&conn, deck).unwrap();
+        crate::piles::sync(&conn, table).unwrap();
+        let runtime = std::env::var("APPDATA").map(|a| Path::new(&a).join("com.stillmvd.sorter").join("runtime")).unwrap();
+        let mut engine = Engine::load(&runtime).ok();
+        let t = Instant::now();
+        let all = files(&conn).unwrap();
+        println!("ЗАМЕР движок {} · files() {} шт за {:?}", engine.is_some(), all.len(), t.elapsed());
+        let n: usize = std::env::var("SORTER_BENCH_N").ok().and_then(|v| v.parse().ok()).unwrap_or(200);
+        let mut index = Index::load(&conn).unwrap();
+        let (mut t_next, mut t_print, mut t_embed, mut t_save, mut t_cmp) = (Duration::ZERO, Duration::ZERO, Duration::ZERO, Duration::ZERO, Duration::ZERO);
+        let (mut videos, mut photos, mut done) = (0, 0, 0);
+        let total = Instant::now();
+        for _ in 0..n {
+            let t = Instant::now();
+            let Some(file) = next_file(&conn).unwrap() else { break };
+            t_next += t.elapsed();
+            if crate::deck::photo_name(&file.path) {
+                photos += 1;
+            } else {
+                videos += 1;
+            }
+            done += 1;
+            let t = Instant::now();
+            let print = print::print(Path::new(&file.path));
+            t_print += t.elapsed();
+            let t = Instant::now();
+            let vectors = print.as_ref().map(|p| embed(engine.as_mut(), p)).unwrap_or_default();
+            t_embed += t.elapsed();
+            let t = Instant::now();
+            save_print(&conn, &file, print.as_ref(), &vectors).unwrap();
+            t_save += t.elapsed();
+            let Some(p) = print else { continue };
+            let t = Instant::now();
+            let me = Entry { path: file.path.clone(), duration_ms: p.duration_ms, frames: p.frames, audio: p.audio, mean: hints::mean(&vectors).unwrap_or_default(), look: p.look };
+            let audio_set: HashSet<u32> = me.audio.iter().copied().collect();
+            for other in index.candidates(&me) {
+                let _ = compare(&conn, &me, other, &audio_set).unwrap();
+            }
+            index.insert(me);
+            t_cmp += t.elapsed();
+        }
+        let per = |d: Duration| d.as_millis() as f64 / done.max(1) as f64;
+        println!(
+            "ЗАМЕР {done} файлов ({videos} видео, {photos} фото) за {:?}; на файл, мс: next_file {:.1} · print {:.1} · embed {:.1} · save {:.1} · compare {:.1}",
+            total.elapsed(),
+            per(t_next),
+            per(t_print),
+            per(t_embed),
+            per(t_save),
+            per(t_cmp)
+        );
+        let t = Instant::now();
+        let pairs = crate::dupes::exact_pairs(&conn, files(&conn).unwrap()).unwrap();
+        println!("ЗАМЕР exact_pairs (SHA) {} пар за {:?}", pairs.len(), t.elapsed());
+    }
+
+    #[test]
+    #[ignore]
+    fn bench_photo_pairs() {
+        let Ok(db) = std::env::var("SORTER_DB") else { return };
+        let conn = Connection::open(db).unwrap();
+        let mut photos: Vec<(i64, Entry)> = entries_with_rows(&conn).unwrap().into_iter().filter(|(_, e)| crate::deck::photo_name(&e.path)).collect();
+        photos.sort_by_key(|(row, _)| *row);
+        let n: usize = std::env::var("SORTER_BENCH_N").ok().and_then(|v| v.parse().ok()).unwrap_or(photos.len()).min(photos.len());
+        let (mut pairs, mut same, mut close, mut crops) = (0u64, 0u64, 0u64, 0u64);
+        let mut distinct: HashSet<(u64, u64)> = HashSet::new();
+        let (mut t_cheap, mut t_contains) = (Duration::ZERO, Duration::ZERO);
+        let total = Instant::now();
+        for i in 0..n {
+            let a = &photos[i].1;
+            for (_, b) in &photos[..i] {
+                pairs += 1;
+                let t = Instant::now();
+                let ham = match (a.frames.first(), b.frames.first()) {
+                    (Some(x), Some(y)) => (x ^ y).count_ones(),
+                    _ => 64,
+                };
+                let semantic = if a.mean.is_empty() || b.mean.is_empty() { 0.0 } else { hints::dot(&a.mean, &b.mean) };
+                t_cheap += t.elapsed();
+                if ham <= PHOTO_HAM {
+                    same += 1;
+                    continue;
+                }
+                if semantic < PHOTO_CANDIDATE {
+                    continue;
+                }
+                close += 1;
+                let (ha, hb) = (a.frames.first().copied().unwrap_or(0), b.frames.first().copied().unwrap_or(0));
+                distinct.insert((ha.min(hb), ha.max(hb)));
+                let t = Instant::now();
+                if compare_photos(a, b).is_some() {
+                    crops += 1;
+                }
+                t_contains += t.elapsed();
+            }
+            if (i + 1) % 250 == 0 {
+                println!("{} фото · {:?} · пар {pairs} · до contains {close} · contains {:?}", i + 1, total.elapsed(), t_contains);
+            }
+        }
+        println!(
+            "ЗАМЕР-ФОТО {n} фото за {:?}: пар {pairs}, same {same}, до contains {close} ({:.1} мс на пару), кадрирований {crops}, разных пар картинок {}; дешёвая часть {:?}, contains {:?}",
+            total.elapsed(),
+            t_contains.as_secs_f64() * 1000.0 / close.max(1) as f64,
+            distinct.len(),
+            t_cheap,
+            t_contains
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn bench_printer() {
+        let (deck, table) = (r"G:\sorter-test\big", r"G:\sorter-test\big-table");
+        if !Path::new(deck).is_dir() {
+            return;
+        }
+        unsafe {
+            let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED);
+        }
+        crate::develop::prepare_thread();
+        let dir = std::env::temp_dir().join("sorter-bench-printer");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = Connection::open(dir.join("db.sqlite")).unwrap();
+        crate::db::init(&conn).unwrap();
+        crate::db::set_setting(&conn, "deck_path", deck).unwrap();
+        crate::db::set_setting(&conn, "table_path", table).unwrap();
+        crate::db::set_setting(&conn, "dupes_enabled", "1").unwrap();
+        crate::db::set_setting(&conn, "dupes_scope", "all").unwrap();
+        crate::deck::sync(&conn, deck).unwrap();
+        crate::piles::sync(&conn, table).unwrap();
+        let runtime = std::env::var("APPDATA").map(|a| Path::new(&a).join("com.stillmvd.sorter").join("runtime")).unwrap();
+        let mut engine = Engine::load(&runtime).ok();
+        let n: usize = std::env::var("SORTER_BENCH_N").ok().and_then(|v| v.parse().ok()).unwrap_or(200);
+        let mut printer = Printer::new();
+        let (mut done, mut worst, mut mark) = (0, Duration::ZERO, 250);
+        let total = Instant::now();
+        let mut window = (Instant::now(), [Duration::ZERO; 4]);
+        while done < n {
+            let t = Instant::now();
+            let Some((k, _)) = printer.step(&conn, engine.as_mut()).unwrap() else { break };
+            worst = worst.max(t.elapsed());
+            done += k;
+            if done >= mark {
+                let d: Vec<String> = printer.spent.iter().zip(window.1).map(|(a, b)| format!("{:.0}", (*a - b).as_secs_f64())).collect();
+                let photos: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM (SELECT path FROM fingerprint WHERE state != 'new' ORDER BY rowid DESC LIMIT 250) WHERE lower(path) LIKE '%.jpg' OR lower(path) LIKE '%.png'", [], |r| r.get(0))
+                    .unwrap();
+                println!("ОКНО {done}: {:.0} с на 250 · фото {photos} · декод/эмбед/запись/сравнение {} с", window.0.elapsed().as_secs_f64(), d.join("/"));
+                window = (Instant::now(), printer.spent);
+                mark += 250;
+            }
+        }
+        println!(
+            "ЗАМЕР-ПОСЛЕ движок {} · потоков {} · {done} файлов за {:?} = {:.1} мс на файл · самая долгая пачка {:?}",
+            engine.is_some(),
+            crate::develop::workers(),
+            total.elapsed(),
+            total.elapsed().as_millis() as f64 / done.max(1) as f64,
+            worst
+        );
     }
 }

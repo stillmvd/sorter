@@ -25,22 +25,25 @@ export function PageHeader({
   light,
   bold,
   note,
+  sub,
   actions,
 }: {
   tag?: ReactNode;
   light: string;
   bold: string;
   note?: string;
+  sub?: ReactNode;
   actions?: ReactNode;
 }) {
   return (
-    <div className="flex items-end gap-3">
-      <div className="flex flex-1 flex-col gap-3.5">
+    <div className="flex flex-wrap items-end gap-3">
+      <div className="flex min-w-max flex-1 flex-col gap-3.5">
         {tag}
         <Heading light={light} bold={bold} />
+        {sub}
         {note && <p className="m-0 max-w-[60ch] text-[15px] leading-[1.55] text-dim">{note}</p>}
       </div>
-      {actions}
+      {actions && <div className="ml-auto flex items-center gap-3">{actions}</div>}
     </div>
   );
 }
