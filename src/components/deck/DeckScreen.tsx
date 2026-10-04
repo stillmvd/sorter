@@ -72,12 +72,14 @@ export function DeckScreen({
   onPiles,
   onJournal,
   onSettings,
+  onHome,
   banner,
 }: {
   initial: AppState;
   onPiles: () => void;
   onJournal: () => void;
   onSettings: () => void;
+  onHome: () => void;
   banner?: React.ReactNode;
 }) {
   const [cards, setCards] = useState<Card[]>([]);
@@ -714,6 +716,7 @@ export function DeckScreen({
     }
     if (e.key === "Escape") {
       if (query) setQuery("");
+      else if (empty) onHome();
       else if (mode === "table") setSelected(new Set());
       return;
     }
@@ -814,6 +817,7 @@ export function DeckScreen({
           tablePath={initial.settings.table_path ?? ""}
           hintsOn={initial.settings.hints_enabled === "1"}
           onJournal={onJournal}
+          onHome={onHome}
           rest={
             other && restLeft > 0
               ? {

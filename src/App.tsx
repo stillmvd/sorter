@@ -14,6 +14,7 @@ export default function App() {
   const [state, setState] = useState<AppState | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
+  const [home, setHome] = useState(false);
   const [developView, setDevelopView] = useState(false);
   const [screen, setScreen] = useState<"deck" | "piles" | "journal" | "settings">("deck");
 
@@ -91,7 +92,7 @@ export default function App() {
   const back = useCallback(() => void reload().then(() => setScreen("deck")), [reload]);
 
   const ready = !!state?.settings.deck_path && !!state?.settings.table_path;
-  const showStart = state && (!ready || (!started && !state.settings.mode));
+  const showStart = state && (!ready || home || state.missing.length > 0 || (!started && !state.settings.mode));
 
   return (
     <div className="flex h-full flex-col">
@@ -104,6 +105,7 @@ export default function App() {
           onStart={async () => {
             await ipc.setSetting("mode", "deck");
             setStarted(true);
+            setHome(false);
             await reload();
           }}
         />
@@ -143,6 +145,7 @@ export default function App() {
           onPiles={() => setScreen("piles")}
           onJournal={() => setScreen("journal")}
           onSettings={() => setScreen("settings")}
+          onHome={() => setHome(true)}
         />
       )}
     </div>

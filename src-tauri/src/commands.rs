@@ -83,6 +83,7 @@ pub struct StateView {
     settings: HashMap<String, String>,
     deck: DeckCounts,
     piles: Vec<PileView>,
+    missing: Vec<&'static str>,
 }
 
 fn snapshot(conn: &Connection, state: &AppState) -> AppResult<StateView> {
@@ -101,12 +102,18 @@ fn snapshot(conn: &Connection, state: &AppState) -> AppResult<StateView> {
         Err(_) => (DeckCounts { total: 0, left: 0, placed: 0, by_kind: ByKind::default() }, Vec::new()),
     };
     let developing = crate::develop::status(conn, state.paused.load(Ordering::Relaxed), dupes::printed(conn)?)?;
+    let missing = [("deck_path", "deck"), ("table_path", "table")]
+        .into_iter()
+        .filter(|(key, _)| settings.get(*key).is_some_and(|p| !Path::new(p).is_dir()))
+        .map(|(_, name)| name)
+        .collect();
     Ok(StateView {
         cache_dir: state.data_dir.join("cache").to_string_lossy().into_owned(),
         developing,
         settings,
         deck,
         piles,
+        missing,
     })
 }
 

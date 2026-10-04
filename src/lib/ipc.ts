@@ -139,6 +139,7 @@ export type AppState = {
   settings: Settings;
   deck: { total: number; left: number; placed: number; byKind: { video: KindCounts; photo: KindCounts } };
   piles: Pile[];
+  missing: ("deck" | "table")[];
 };
 
 export type AppError = { code: string; message: string };

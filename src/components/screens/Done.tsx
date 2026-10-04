@@ -13,6 +13,7 @@ export function Done({
   tablePath,
   hintsOn,
   onJournal,
+  onHome,
   rest,
 }: {
   rest?: { gone: string; left: string; show: string; onShow: () => void };
@@ -22,6 +23,7 @@ export function Done({
   tablePath: string;
   hintsOn: boolean;
   onJournal: () => void;
+  onHome: () => void;
 }) {
   const [stats, setStats] = useState<{ cards: number; hinted: number } | null>(null);
 
@@ -58,6 +60,9 @@ export function Done({
           )}
         </div>
         <div className="flex gap-2">
+          <Button size={48} variant="ghost" onClick={onHome} hotkey="Esc">
+            Выбрать другую папку
+          </Button>
           <Button size={48} onClick={onJournal} hotkey="Ctrl J">
             Открыть журнал
           </Button>

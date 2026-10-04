@@ -48,6 +48,7 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
   const hints = state.settings.hints_enabled === "1";
   const piles = state.piles.filter((p) => !p.isTrash).length;
   const count = deckInfo?.count ?? state.deck.left;
+  const gone = (which: "deck" | "table") => (state.missing.includes(which) ? "Этой папки больше нет — выбери другую." : undefined);
 
   const pick = async (which: "deck" | "table") => {
     const path = await open({ directory: true, title: which === "deck" ? "Где лежат видео?" : "Куда раскладывать?" });
@@ -83,7 +84,7 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
             title="Откуда брать видео"
             value={reading ?? deck ?? "Папка не выбрана"}
             note={reading ? "Читаю папку…" : deck ? `Колода — ${count} ${plural(count, "видео", "видео", "видео")}${deckInfo ? ` · ${gb(deckInfo.bytes)}` : ""}. Берутся только видео в самой папке, вложенные не трогаю.` : "Колода — папка с неразобранными видео."}
-            error={errors.deck}
+            error={errors.deck ?? gone("deck")}
             action={
               <Button variant={deck ? "secondary" : "primary"} onClick={() => pick("deck")}>
                 {deck ? "Другая папка" : "Выбрать папку"}
@@ -102,7 +103,7 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
                   : "Стол — папок внутри пока нет, стопки создашь по ходу."
                 : "Стол — каждая папка внутри станет стопкой. Пустая — не беда, стопки создашь по ходу."
             }
-            error={errors.table}
+            error={errors.table ?? gone("table")}
             action={
               <Button variant={table || !deck ? "secondary" : "primary"} onClick={() => pick("table")}>
                 {table ? "Другая папка" : "Выбрать папку"}
@@ -130,7 +131,7 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
         </div>
         <div className="flex-1" />
         <div className="flex items-center gap-3">
-          <Button variant="primary" size={48} disabled={!deck || !table} onClick={onStart}>
+          <Button variant="primary" size={48} disabled={!deck || !table || state.missing.length > 0} onClick={onStart}>
             Разобрать колоду
           </Button>
           {(!deck || !table) && <span className="text-[13px] text-dim">Сначала выбери {deck ? "стол" : "колоду"}</span>}
