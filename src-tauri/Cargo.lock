@@ -3810,7 +3810,7 @@ dependencies = [
 
 [[package]]
 name = "sorter"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "image",
  "notify",
