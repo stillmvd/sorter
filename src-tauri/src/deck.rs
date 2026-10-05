@@ -153,21 +153,26 @@ pub fn sync_seen(conn: &Connection, deck: &str, seen: &mut dyn FnMut(usize)) -> 
         .collect();
     files.sort_by_key(|f| f.0.to_lowercase());
 
-    let rows: HashMap<String, (i64, i64, i64)> = conn
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
+    let rows: HashMap<String, (i64, i64, i64)> = tx
         .prepare("SELECT id, file_name, size, mtime FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred')")?
         .query_map(params![deck], |r| Ok((r.get::<_, String>(1)?.to_lowercase(), (r.get(0)?, r.get(2)?, r.get(3)?))))?
         .collect::<Result<_, _>>()?;
 
-    let busy: std::collections::HashSet<String> = conn
-        .prepare("SELECT i.from_path FROM move_item i JOIN move m ON m.id = i.move_id WHERE m.state IN ('pending','undoing')")?
-        .query_map([], |r| r.get::<_, String>(0))?
-        .map(|p| p.map(|p| p.to_lowercase()))
-        .collect::<Result<_, _>>()?;
+    let mut busy = std::collections::HashSet::new();
+    let mut busy_cards = std::collections::HashSet::new();
+    for row in tx
+        .prepare("SELECT i.from_path, i.card_id FROM move_item i JOIN move m ON m.id = i.move_id WHERE m.state IN ('pending','undoing')")?
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?)))?
+    {
+        let (path, card) = row?;
+        busy.insert(path.to_lowercase());
+        busy_cards.extend(card);
+    }
     let present: HashMap<String, ()> = files.iter().map(|f| (f.0.to_lowercase(), ())).collect();
-    let tx = conn.unchecked_transaction()?;
     let mut gone = Vec::new();
     for (name, (id, _, _)) in &rows {
-        if !present.contains_key(name) {
+        if !present.contains_key(name) && !busy_cards.contains(id) && !dir.join(name).exists() {
             tx.execute("UPDATE card SET status = 'gone' WHERE id = ?1", params![id])?;
             gone.push(*id);
         }
@@ -196,6 +201,7 @@ pub fn sync_seen(conn: &Connection, deck: &str, seen: &mut dyn FnMut(usize)) -> 
                 )?;
             }
             Some(_) => {}
+            None if !dir.join(&name).exists() => {}
             None if !ready(&dir.join(&name)) || busy.contains(&dir.join(&name).to_string_lossy().to_lowercase()) => pending = true,
             None => {
                 let named = taken_from_name(&name);
@@ -309,6 +315,28 @@ mod tests {
         assert_eq!(taken_from_name("1525005239349.mp4"), Some(1525005239349));
         assert_eq!(taken_from_name("VID20220216151658.mp4"), Some(1645024618000));
         assert_eq!(taken_from_name("clip.mp4"), None);
+    }
+
+    #[test]
+    fn sync_keeps_card_with_move_in_flight() {
+        let tmp = TempDir::new().unwrap();
+        let deck = tmp.path().to_string_lossy().into_owned();
+        fs::write(tmp.path().join("a.mp4"), b"a").unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        db::init(&conn).unwrap();
+        let id = sync(&conn, &deck).unwrap().added[0];
+        conn.execute("INSERT INTO pile(id, table_path, name, ord) VALUES (1, 'T', 'P', 0)", []).unwrap();
+        conn.execute("INSERT INTO move(id, at, method, pile_id, state) VALUES (1, 0, 'key', 1, 'pending')", []).unwrap();
+        conn.execute(
+            "INSERT INTO move_item(move_id, card_id, from_path, to_path, step) VALUES (1, ?1, ?2, 'T/P/a.mp4', 'planned')",
+            params![id, tmp.path().join("a.mp4").to_string_lossy()],
+        )
+        .unwrap();
+        fs::remove_file(tmp.path().join("a.mp4")).unwrap();
+        let r = sync(&conn, &deck).unwrap();
+        assert!(r.gone.is_empty() && r.added.is_empty());
+        let status: String = conn.query_row("SELECT status FROM card WHERE id = ?1", params![id], |r| r.get(0)).unwrap();
+        assert_eq!(status, "in_deck");
     }
 
     #[test]

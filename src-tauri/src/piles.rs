@@ -3,9 +3,11 @@ use crate::error::{io_error, AppError, AppResult};
 use crate::moves::{safe_rename, validate_pile_name};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
+use std::time::SystemTime;
 
 pub const KEYS: [&str; 19] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"];
 pub const TRASH_KEY: &str = "Delete";
@@ -71,10 +73,20 @@ pub fn sync(conn: &Connection, table: &str) -> AppResult<()> {
     Ok(())
 }
 
+static COUNTS: LazyLock<Mutex<HashMap<PathBuf, (SystemTime, i64)>>> = LazyLock::new(Default::default);
+
 fn count_media(dir: &Path) -> i64 {
-    fs::read_dir(dir)
+    let Ok(stamp) = fs::metadata(dir).and_then(|m| m.modified()) else { return 0 };
+    if let Some(&(at, n)) = COUNTS.lock().unwrap().get(dir) {
+        if at == stamp {
+            return n;
+        }
+    }
+    let n = fs::read_dir(dir)
         .map(|it| it.filter_map(|e| e.ok()).filter(|e| is_media(&e.path())).count() as i64)
-        .unwrap_or(0)
+        .unwrap_or(0);
+    COUNTS.lock().unwrap().insert(dir.to_path_buf(), (stamp, n));
+    n
 }
 
 pub fn list(conn: &Connection, table: &str) -> AppResult<Vec<PileView>> {

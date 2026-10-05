@@ -145,6 +145,11 @@ export function DeckScreen({
     shake(f.pileId);
   }, []);
   const pending = useRef(new Set<number>());
+  const settled = useRef(0);
+  const settle = (ids: number[]) => {
+    ids.forEach((id) => pending.current.delete(id));
+    settled.current++;
+  };
   const search = useRef<HTMLInputElement>(null);
   const pilesRef = useRef(piles);
   pilesRef.current = piles;
@@ -253,14 +258,22 @@ export function DeckScreen({
   );
 
   const refill = useCallback(async () => {
-    const fresh = await ipc.deckWindow(0, 30, kindRef.current);
-    setCards(fresh.filter((c) => !pending.current.has(c.id)));
+    let fresh;
+    for (let seen = -1; seen !== settled.current; ) {
+      seen = settled.current;
+      fresh = await ipc.deckWindow(0, 30, kindRef.current);
+    }
+    setCards(fresh!.filter((c) => !pending.current.has(c.id)));
     setLoaded(true);
   }, []);
 
   const loadSheet = useCallback(async () => {
-    const all = await ipc.deckWindow(0, 100000, kindRef.current);
-    const fresh = all.filter((c) => !pending.current.has(c.id));
+    let all;
+    for (let seen = -1; seen !== settled.current; ) {
+      seen = settled.current;
+      all = await ipc.deckWindow(0, 100000, kindRef.current);
+    }
+    const fresh = all!.filter((c) => !pending.current.has(c.id));
     setSheet(fresh);
     setSelected((sel) => new Set(fresh.filter((c) => sel.has(c.id)).map((c) => c.id)));
     setSheetLoaded(true);
@@ -362,7 +375,7 @@ export function DeckScreen({
 
   const place = useCallback(
     async (pile: Pile, method: Method, send?: (card: Card) => Promise<{ move: Move; piles: Pile[] }>) => {
-      const card = cardsRef.current[0];
+      const card = cardsRef.current.find((c) => !pending.current.has(c.id));
       if (!card) return;
       play(pile.isTrash ? "trash" : method === "new_pile" ? "new_pile" : "place");
       const target = pileElement(pile.id);
@@ -391,7 +404,7 @@ export function DeckScreen({
         setCounts((c) => shift(c, [card], -1));
         setToast(errorText(e));
       } finally {
-        pending.current.delete(card.id);
+        settle([card.id]);
       }
       if (cardsRef.current.length < 12 || current?.kind === "photo") void refill();
     },
@@ -429,7 +442,7 @@ export function DeckScreen({
         setCounts((c) => shift(c, batch, -1));
         setToast(errorText(e));
       } finally {
-        ids.forEach((id) => pending.current.delete(id));
+        settle(ids);
       }
       if (failed) {
         await loadSheet();
@@ -459,7 +472,7 @@ export function DeckScreen({
         setCounts((c) => ({ ...c, left: c.left + ids.length, placed: c.placed - ids.length }));
         setToast(errorText(e));
       } finally {
-        ids.forEach((id) => pending.current.delete(id));
+        settle(ids);
       }
       void refill();
     },
@@ -631,6 +644,7 @@ export function DeckScreen({
   const undo = useCallback(async () => {
     try {
       const r = await ipc.undoLast();
+      settled.current++;
       if (!r.move) {
         setToast("Забирать нечего — ходов ещё не было.");
         return;
