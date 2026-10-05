@@ -1046,10 +1046,16 @@ export function DeckScreen({
             <div className="flex min-w-0 flex-1 flex-col justify-center-safe gap-3 overflow-y-auto">
               <div className="flex flex-col gap-1">
                 <div className="flex min-w-0 items-center gap-2">
-                  <div className="truncate text-lg font-bold">{(focusCard ?? current).fileName}</div>
-                  <Tag icon={(focusCard ?? current).kind === "photo" ? <ImageIcon strokeWidth={1.5} /> : <Video strokeWidth={1.5} />}>
-                    {(focusCard ?? current).kind === "photo" ? "Фото" : "Видео"} · {(focusCard ?? current).fileName.split(".").pop()?.toUpperCase()}
-                  </Tag>
+                  <span
+                    title={`${(focusCard ?? current).kind === "photo" ? "Фото" : "Видео"} · ${(focusCard ?? current).fileName.split(".").pop()?.toUpperCase()}`}
+                    className="flex h-6 shrink-0 items-center gap-1.5 rounded-md bg-fg px-2 text-[11px] font-bold tracking-[0.04em] text-ink"
+                  >
+                    {(focusCard ?? current).kind === "photo" ? <ImageIcon className="h-3.5 w-3.5" strokeWidth={2} /> : <Video className="h-3.5 w-3.5" strokeWidth={2} />}
+                    {(focusCard ?? current).fileName.split(".").pop()?.toUpperCase()}
+                  </span>
+                  <div className="min-w-0 truncate text-lg font-bold" title={(focusCard ?? current).fileName}>
+                    {(focusCard ?? current).fileName}
+                  </div>
                   <button
                     type="button"
                     aria-label="Показать в проводнике"
