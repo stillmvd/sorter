@@ -135,7 +135,7 @@ export const placeLabel = (d: GroupItem) =>
   d.where === "pile" ? `в стопке «${pileLabel(d)}»` : d.where === "folder" ? `в папке ${d.folder ?? ""}` : "в колоде";
 
 export type Settings = Partial<
-  Record<"deck_path" | "table_path" | "hints_enabled" | "theme" | "muted" | "mode" | "volume" | "updates" | "kind_filter" | "series_rest" | "dupes_enabled" | "dupes_scope" | "dupe_search", string>
+  Record<"deck_path" | "table_path" | "hints_enabled" | "theme" | "muted" | "mode" | "volume" | "kind_filter" | "series_rest" | "dupes_enabled" | "dupes_scope" | "dupe_search", string>
 >;
 
 export type KindCounts = { left: number; placed: number };
@@ -190,29 +190,12 @@ export const onHintsChanged = (fn: () => void) => listen("hints://changed", () =
 export const onReading = (fn: (found: number) => void) => listen<number>("deck://reading", (e) => fn(e.payload));
 export const onSeries = (fn: () => void) => listen("deck://series", () => fn());
 export const onDupesChanged = (fn: () => void) => listen("dupes://changed", () => fn());
-export type UpdatePhase = "idle" | "checking" | "latest" | "downloading" | "ready" | "failed" | "off";
-
-export type UpdateState = {
-  phase: UpdatePhase;
-  version: string | null;
-  progress: number | null;
-  notes: string | null;
-  error: string | null;
-  checkedAt: number | null;
-  installed: boolean;
-  current: string;
-};
-
-export const onUpdateState = (fn: (s: UpdateState) => void) => listen<UpdateState>("update://state", (e) => fn(e.payload));
 export const onOpenFolder = (fn: (path: string) => void) => listen<string>("open://folder", (e) => fn(e.payload));
 export const onProgress = (fn: (p: Developing) => void) => listen<Developing>("develop://progress", (e) => fn(e.payload));
 
 export const ipc = {
   getState: () => invoke<AppState>("get_state"),
   takeIncoming: () => invoke<string | null>("take_incoming"),
-  updateState: () => invoke<UpdateState>("update_state"),
-  updateCheck: () => invoke<UpdateState>("update_check"),
-  updateInstall: () => invoke<void>("update_install"),
   chooseDeck: (path: string) => invoke<{ count: number; bytes: number }>("choose_deck", { path }),
   cancelDeck: () => invoke<void>("cancel_deck"),
   chooseTable: (path: string) => invoke<Pile[]>("choose_table", { path }),

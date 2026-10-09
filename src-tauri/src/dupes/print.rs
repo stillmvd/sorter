@@ -15,7 +15,6 @@ pub struct Decoded {
     pub duration_ms: i64,
     pub width: u32,
     pub height: u32,
-    pub rotation: u32,
     pub grays: Vec<GrayImage>,
     pub stills: Vec<RgbImage>,
     pub mono: Vec<f32>,
@@ -25,7 +24,6 @@ pub struct Print {
     pub duration_ms: i64,
     pub width: u32,
     pub height: u32,
-    pub rotation: u32,
     pub bitrate: i64,
     pub bbox: [f32; 4],
     pub frames: Vec<u64>,
@@ -140,7 +138,9 @@ fn corr(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>() / a.len() as f32
 }
 
-static CONTAINS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<(u64, u64), (f32, f32)>>> =
+type Memo = std::sync::Mutex<std::collections::HashMap<(u64, u64), (f32, f32)>>;
+
+static CONTAINS: std::sync::LazyLock<Memo> =
     std::sync::LazyLock::new(Default::default);
 
 fn digest(bytes: &[u8]) -> u64 {
@@ -373,7 +373,6 @@ pub fn print_photo(path: &Path) -> Option<Print> {
         duration_ms: 0,
         width: m.width,
         height: m.height,
-        rotation: 0,
         bitrate: 0,
         bbox: b,
         frames: vec![phash(&gray, b)],
@@ -400,7 +399,6 @@ pub fn print(path: &Path) -> Option<Print> {
         duration_ms: d.duration_ms,
         width: d.width,
         height: d.height,
-        rotation: d.rotation,
         bitrate: if d.duration_ms > 0 { size * 8 * 1000 / d.duration_ms } else { 0 },
         bbox: b,
         frames: d.grays.iter().map(|g| phash(g, b)).collect(),
@@ -586,7 +584,7 @@ pub mod mf {
             }
             let (width, height) = if rotation == 90 || rotation == 270 { (h, w) } else { (w, h) };
             let duration_ms = if duration > 0 { duration / 10_000 } else { grays.len() as i64 * 1000 / FPS };
-            Ok(Decoded { duration_ms, width, height, rotation, grays, stills, mono: Vec::new() })
+            Ok(Decoded { duration_ms, width, height, grays, stills, mono: Vec::new() })
         }
     }
 
@@ -648,8 +646,8 @@ mod tests {
         };
         let a = img(0, 1.0);
         let b = img(20, 0.8);
-        let ha = phash(&a, bbox(&[a.clone()]));
-        let hb = phash(&b, bbox(&[b.clone()]));
+        let ha = phash(&a, bbox(std::slice::from_ref(&a)));
+        let hb = phash(&b, bbox(std::slice::from_ref(&b)));
         assert!((ha ^ hb).count_ones() <= 6, "{}", (ha ^ hb).count_ones());
     }
 
@@ -707,13 +705,12 @@ mod bench {
             video_ms += pr.duration_ms;
             spent += ms;
             println!(
-                "{} {}ms видео {}ms {}x{} rot {} кадров {} звук {} стоп {} box {:?}",
+                "{} {}ms видео {}ms {}x{} кадров {} звук {} стоп {} box {:?}",
                 p.file_name().unwrap().to_string_lossy(),
                 ms,
                 pr.duration_ms,
                 pr.width,
                 pr.height,
-                pr.rotation,
                 pr.frames.len(),
                 pr.audio.len(),
                 pr.stills.len(),

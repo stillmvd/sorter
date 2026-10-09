@@ -1,3 +1,4 @@
+import { UpdateBadge } from "@stillmvd/tauri-ship";
 import { Mark } from "./ui/Mark";
 import { WindowControls } from "./WindowControls";
 
@@ -10,6 +11,9 @@ export function Titlebar({ path }: { path?: string }) {
         {path && <span className="text-[13px] font-medium text-dim">{path}</span>}
       </div>
       <div data-tauri-drag-region className="min-w-12 flex-1 self-stretch" />
+      <span className="mr-2 flex empty:hidden">
+        <UpdateBadge lang="ru" />
+      </span>
       <WindowControls />
     </header>
   );

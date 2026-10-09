@@ -23,9 +23,9 @@ pub struct AppState {
     pub incoming: Mutex<Option<String>>,
 }
 
-const USER_KEYS: [&str; 10] =
-    ["hints_enabled", "theme", "muted", "mode", "volume", "updates", "kind_filter", "series_rest", "dupes_enabled", "dupes_scope"];
-const SETTING_KEYS: [&str; 13] = [
+const USER_KEYS: [&str; 9] =
+    ["hints_enabled", "theme", "muted", "mode", "volume", "kind_filter", "series_rest", "dupes_enabled", "dupes_scope"];
+const SETTING_KEYS: [&str; 12] = [
     "deck_path",
     "table_path",
     "hints_enabled",
@@ -33,7 +33,6 @@ const SETTING_KEYS: [&str; 13] = [
     "muted",
     "mode",
     "volume",
-    "updates",
     "kind_filter",
     "series_rest",
     "dupes_enabled",
@@ -226,9 +225,6 @@ pub fn set_setting_cmd(app: tauri::AppHandle, state: State<AppState>, key: Strin
             return Err(AppError::new("BAD_SETTING", "Такой области поиска нет."));
         }
         _ => set_setting(&conn, &key, &value)?,
-    }
-    if key == "updates" {
-        crate::updates::toggled(&app);
     }
     if key.starts_with("dupes_") {
         state.wake.store(true, Ordering::Relaxed);

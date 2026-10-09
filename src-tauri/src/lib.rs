@@ -12,13 +12,13 @@ mod series;
 mod piles;
 mod playable;
 mod taskbar_icon;
-mod updates;
 mod watch;
 
 use commands::AppState;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 fn fit_to_screen(window: &tauri::WebviewWindow) {
     if window.is_maximized().unwrap_or(false) {
@@ -48,6 +48,9 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_ship::init(|app| {
+            let _ = app.save_window_state(StateFlags::all());
+        }))
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -72,19 +75,14 @@ pub fn run() {
             watch::spawn(app.handle().clone(), data_dir.join("sorter.db"), wake.clone());
             let incoming = Mutex::new(commands::folder_arg(std::env::args()));
             app.manage(AppState { db: Mutex::new(conn), db_path: data_dir.join("sorter.db"), data_dir, paused, wake, incoming });
-            app.manage(updates::Updates::default());
-            updates::init(app.handle());
             if let Some(window) = app.get_webview_window("main") {
                 taskbar_icon::apply(&window);
                 fit_to_screen(&window);
                 let target = window.clone();
-                let handle = app.handle().clone();
-                window.on_window_event(move |event| match event {
-                    tauri::WindowEvent::ScaleFactorChanged { .. } => taskbar_icon::apply(&target),
-                    tauri::WindowEvent::CloseRequested { .. } => {
-                        let _ = updates::install(&handle, false);
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::ScaleFactorChanged { .. } = event {
+                        taskbar_icon::apply(&target);
                     }
-                    _ => {}
                 });
                 let _ = window.show();
             }
@@ -126,9 +124,6 @@ pub fn run() {
             commands::trash_copies,
             commands::replace_copy,
             commands::take_incoming,
-            updates::update_state,
-            updates::update_check,
-            updates::update_install,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

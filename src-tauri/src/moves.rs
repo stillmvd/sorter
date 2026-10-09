@@ -365,8 +365,8 @@ fn move_into(
     let conn: &Connection = conn;
 
     let mut failure = None;
-    for idx in 0..items.len() {
-        let (item_id, from, to) = (items[idx].id, items[idx].from.clone(), items[idx].to.clone());
+    for (idx, item) in items.iter_mut().enumerate() {
+        let (item_id, from, to) = (item.id, item.from.clone(), item.to.clone());
         let result = match &to {
             Some(to) => transfer(&from, to, rename, || {
                 set_step(conn, item_id, "copied")?;
@@ -379,7 +379,7 @@ fn move_into(
         match result {
             Ok(()) => {
                 set_step(conn, item_id, "done")?;
-                items[idx].step = "done".into();
+                item.step = "done".into();
             }
             Err(e) => {
                 failure = Some((idx, e));

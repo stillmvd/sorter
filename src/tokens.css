@@ -18,6 +18,17 @@
   --t-fast: 120ms;
   --t-mid: 200ms;
   --t-slow: 320ms;
+  --ship-bg: var(--raised);
+  --ship-fg: var(--fg);
+  --ship-muted: var(--dim);
+  --ship-accent: var(--fg);
+  --ship-accent-hover: color-mix(in oklab, var(--fg) 86%, var(--ground));
+  --ship-accent-fg: var(--ink);
+  --ship-accent-soft: var(--strong);
+  --ship-warn: var(--danger);
+  --ship-hover: var(--strong);
+  --ship-border: var(--line);
+  --ship-radius: 20px;
 }
 
 @media (prefers-color-scheme: light) {

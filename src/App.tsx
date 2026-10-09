@@ -1,3 +1,4 @@
+import { UpdateToast } from "@stillmvd/tauri-ship";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Titlebar } from "./components/Titlebar";
@@ -182,6 +183,7 @@ export default function App() {
           onSearch={search}
         />
       )}
+      <UpdateToast lang="ru" />
     </div>
   );
 }

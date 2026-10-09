@@ -42,7 +42,8 @@ windows = { version = "0.62", features = [
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = "2"
-tauri-plugin-updater = "2"
+tauri-plugin-updater = "2.13"
+tauri-plugin-ship = { git = "https://github.com/stillmvd/tauri-ship", tag = "v0.1.1" }
 
 [dev-dependencies]
 tempfile = "3"

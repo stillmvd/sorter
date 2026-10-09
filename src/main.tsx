@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import "@stillmvd/tauri-ship/ship.css";
 import "./styles.css";
 
 document.addEventListener("pointerup", (e) => {

@@ -224,7 +224,7 @@ mod tests {
                 let mut audio: Vec<u32> = (0..len * 5).map(|_| rng.next() as u32).collect();
                 if rng.below(4) == 0 {
                     let shared = rng.below(3) as u32;
-                    audio.extend(std::iter::repeat(shared).take(1 + rng.below(4) as usize));
+                    audio.extend(std::iter::repeat_n(shared, 1 + rng.below(4) as usize));
                 }
                 out.push(entry(path, frames, audio));
             }

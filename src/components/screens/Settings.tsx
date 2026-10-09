@@ -203,7 +203,7 @@ export function SettingsScreen({
           </div>
         </Tile>
 
-        <UpdatesTile on={state.settings.updates !== "off"} onToggle={(v) => void set("updates", v ? "on" : "off")} />
+        <UpdatesTile />
       </div>
     </main>
   );

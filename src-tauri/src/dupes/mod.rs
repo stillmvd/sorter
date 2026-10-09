@@ -321,7 +321,10 @@ struct Copy {
     position: f64,
 }
 
-fn copy_of(conn: &Connection, path: &str, deck: &str) -> rusqlite::Result<(Copy, Option<i64>, Option<i64>, Option<i64>)> {
+type Found = (Copy, Option<i64>, Option<i64>, Option<i64>);
+type Row = (Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>, f64);
+
+fn copy_of(conn: &Connection, path: &str, deck: &str) -> rusqlite::Result<Found> {
     let p = Path::new(path);
     let in_deck = p.parent().map(|d| d.to_string_lossy().to_lowercase() == deck.to_lowercase()).unwrap_or(false);
     let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -342,7 +345,7 @@ fn copy_of(conn: &Connection, path: &str, deck: &str) -> rusqlite::Result<(Copy,
         .optional()?
     };
     let size = fs::metadata(p).map(|m| m.len() as i64).unwrap_or(0);
-    let (id, w, h, d, taken, pos): (Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>, f64) = match row {
+    let (id, w, h, d, taken, pos): Row = match row {
         Some((id, w, h, d, t, pos)) => (Some(id), w, h, d, t, pos),
         None => (None, None, None, None, None, f64::MAX),
     };

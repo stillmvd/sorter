@@ -20,8 +20,8 @@
 Скачай `Sorter_<версия>_x64-setup.exe` со страницы [релизов](https://github.com/stillmvd/sorter/releases/latest)
 и запусти. Windows может предупредить о неизвестном издателе — «Подробнее» → «Выполнить в любом случае».
 
-Новые версии Sorter скачивает сам и ставит, когда закроешь окно (Windows один раз спросит разрешение).
-Проверку можно выключить в настройках, блок «Версия и обновления» — тогда Sorter не выходит в сеть совсем.
+Новые версии Sorter проверяет при запуске, раз в час и когда возвращаешься в окно, скачивает в фоне и предлагает
+«Перезапустить» — Windows один раз спросит разрешение. «Позже» оставляет значок со стрелкой в шапке окна.
 
 ## Проводник
 
@@ -40,6 +40,9 @@ pnpm install
 ./scripts/fetch-runtime.ps1   # ONNX Runtime, DirectML и модель DINOv2 для подсказок
 pnpm tauri dev
 pnpm tauri build              # установщик в src-tauri/target/release/bundle/nsis
+pnpm run check                # tsc, clippy, тесты Rust
+pnpm release                  # проверки, версия по коммитам, сборка, тег, публикация в GitHub Releases
 ```
 
-Релиз — тег `vX.Y.Z` (версия в `tauri.conf.json`, `Cargo.toml`, `package.json`), описание — `RELEASE_NOTES.md`.
+Релизы — по стандарту [tauri-ship](https://github.com/stillmvd/tauri-ship): версия только в `package.json`,
+описание — из conventional-коммитов.
