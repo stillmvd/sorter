@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@stillmvd/tauri-ship':
-        specifier: github:stillmvd/tauri-ship#v0.1.1
-        version: https://codeload.github.com/stillmvd/tauri-ship/tar.gz/3c6b49eabd205b269355e927a6b1940936fd700d(@tauri-apps/api@2.12.0)(react@19.3.0)
+        specifier: github:stillmvd/tauri-ship#v0.1.2
+        version: https://codeload.github.com/stillmvd/tauri-ship/tar.gz/35b6fefbc45f67b23d534d565e3c95090f26c83b(@tauri-apps/api@2.12.0)(react@19.3.0)
       '@tauri-apps/api':
         specifier: ^2.12.0
         version: 2.12.0
@@ -460,9 +460,9 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@stillmvd/tauri-ship@https://codeload.github.com/stillmvd/tauri-ship/tar.gz/3c6b49eabd205b269355e927a6b1940936fd700d':
-    resolution: {gitHosted: true, tarball: https://codeload.github.com/stillmvd/tauri-ship/tar.gz/3c6b49eabd205b269355e927a6b1940936fd700d}
-    version: 0.1.1
+  '@stillmvd/tauri-ship@https://codeload.github.com/stillmvd/tauri-ship/tar.gz/35b6fefbc45f67b23d534d565e3c95090f26c83b':
+    resolution: {gitHosted: true, tarball: https://codeload.github.com/stillmvd/tauri-ship/tar.gz/35b6fefbc45f67b23d534d565e3c95090f26c83b}
+    version: 0.1.2
     hasBin: true
     peerDependencies:
       '@tauri-apps/api': ^2
@@ -1255,7 +1255,7 @@ snapshots:
   '@rollup/rollup-win32-x64-msvc@4.63.5':
     optional: true
 
-  '@stillmvd/tauri-ship@https://codeload.github.com/stillmvd/tauri-ship/tar.gz/3c6b49eabd205b269355e927a6b1940936fd700d(@tauri-apps/api@2.12.0)(react@19.3.0)':
+  '@stillmvd/tauri-ship@https://codeload.github.com/stillmvd/tauri-ship/tar.gz/35b6fefbc45f67b23d534d565e3c95090f26c83b(@tauri-apps/api@2.12.0)(react@19.3.0)':
     dependencies:
       '@tauri-apps/api': 2.12.0
       react: 19.3.0
