@@ -16,6 +16,14 @@ function ratioOf(card: CardData, measured: Record<number, number>) {
 
 const ext = (name: string) => name.split(".").pop()?.toUpperCase() ?? "";
 
+export const seekStep = (seconds: number) => (seconds <= 20 ? 3 : seconds <= 60 ? 5 : seconds <= 300 ? 10 : 30);
+
+export function seekBy(sign: number) {
+  const v = document.querySelector<HTMLVideoElement>("[data-card-top] video");
+  if (!v || !Number.isFinite(v.duration)) return;
+  v.currentTime = Math.max(0, Math.min(v.duration - 0.05, v.currentTime + sign * seekStep(v.duration)));
+}
+
 export type SeriesBadge = { index: number; count: number; span: string; marked: boolean };
 
 function PhotoFace({
@@ -108,6 +116,9 @@ function Face({
   const [time, setTime] = useState({ t: 0, d: 0 });
   const [src, setSrc] = useState(() => media(card.path));
   const fixing = useRef<"no" | "busy" | "done">("no");
+  const shown = useRef(false);
+  const resume = useRef(0);
+  const [stoppedAt, setStoppedAt] = useState<number | null>(null);
 
   useEffect(() => {
     const v = ref.current;
@@ -124,6 +135,11 @@ function Face({
   brokenRef.current = onBroken;
 
   const fail = () => {
+    const v = ref.current;
+    if (shown.current && v) {
+      resume.current = v.currentTime;
+      setStoppedAt(v.currentTime);
+    }
     if (fixing.current !== "no") {
       if (fixing.current === "done") brokenRef.current();
       return;
@@ -142,7 +158,7 @@ function Face({
     if (!active) return;
     const v = ref.current;
     const timer = window.setTimeout(() => {
-      if (v && v.readyState < 2 && fixing.current !== "busy") brokenRef.current();
+      if (v && !shown.current && v.readyState < 2 && fixing.current !== "busy") brokenRef.current();
     }, 5000);
     return () => window.clearTimeout(timer);
   }, [active, src]);
@@ -171,7 +187,11 @@ function Face({
             onLoadedMetadata={(e) => {
               const v = e.currentTarget;
               if (v.videoWidth && v.videoHeight) onRatio(v.videoWidth / v.videoHeight);
-              setTime({ t: 0, d: v.duration || 0 });
+              if (resume.current) v.currentTime = resume.current;
+              setTime({ t: resume.current, d: v.duration || 0 });
+            }}
+            onLoadedData={() => {
+              shown.current = true;
             }}
             onTimeUpdate={(e) => setTime({ t: e.currentTarget.currentTime, d: e.currentTarget.duration || 0 })}
             onError={fail}
@@ -186,7 +206,7 @@ function Face({
         )}
         {broken && (
           <div className="absolute inset-0 grid place-items-center p-4 text-center text-[13px] font-medium text-[#a2a2a9]">
-            Это видео не играет внутри Sorter.
+            {stoppedAt === null ? "Это видео не играет внутри Sorter." : `Видео оборвалось на ${tc(stoppedAt)} — дальше файл не читается.`}
             <br />
             Ctrl+O — открыть в плеере
           </div>

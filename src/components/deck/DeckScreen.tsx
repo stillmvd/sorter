@@ -17,14 +17,14 @@ import { DupeBadge } from "./DupeBadge";
 import { play } from "../../lib/sound";
 import { pressToDrag } from "../fx/Drag";
 import { Flights, motionOff, pileElement, shake, snapshot, type Flight } from "../fx/Flight";
-import { FilmStrip, seekFrame } from "./FilmStrip";
+import { FilmStrip } from "./FilmStrip";
 import { KeysHint } from "./KeyLegend";
 import { PileMenu } from "./PileMenu";
 import { VolumeRow } from "./VolumeRow";
 import { Button } from "../ui/Button";
 import { PageHeader, Tag } from "../ui/PageHeader";
 import { SearchField } from "../ui/SearchField";
-import { CardStack } from "./Card";
+import { CardStack, seekBy } from "./Card";
 import { LastMove, LastMoveLine } from "./LastMove";
 import { ContactSheet } from "../table/ContactSheet";
 import { Segment } from "../ui/Segment";
@@ -827,7 +827,7 @@ export function DeckScreen({
     }
     if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && current?.kind === "video") {
       e.preventDefault();
-      seekFrame(current, e.key === "ArrowLeft" ? -1 : 1);
+      seekBy(e.key === "ArrowLeft" ? -1 : 1);
       return;
     }
     if (e.key === "/") {

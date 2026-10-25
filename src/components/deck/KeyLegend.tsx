@@ -15,7 +15,7 @@ const DUPE_ROWS: { keys: string[]; label: string }[] = [
 
 export type Face = "video" | "photo" | "series";
 
-const VIDEO_ONLY = new Set(["пауза — или клик по видео", "кадр плёнки назад / вперёд", "звук", "громкость видео"]);
+const VIDEO_ONLY = new Set(["пауза — или клик по видео", "перемотка назад / вперёд", "звук", "громкость видео"]);
 
 const SERIES_ROWS: { keys: string[]; label: string }[] = [
   { keys: ["←", "→"], label: "снимок серии назад / вперёд" },
@@ -32,7 +32,7 @@ const ROWS: { keys: string[]; label: string }[] = [
   { keys: ["Ctrl", "Z"], label: "забрать ход — можно много раз" },
   { keys: ["Ctrl", "K"], label: "стопки и клавиши" },
   { keys: ["Space"], label: "пауза — или клик по видео" },
-  { keys: ["←", "→"], label: "кадр плёнки назад / вперёд" },
+  { keys: ["←", "→"], label: "перемотка назад / вперёд" },
   { keys: ["M"], label: "звук" },
   { keys: ["↑", "↓"], label: "громкость видео" },
   { keys: ["/"], label: "искать стопку" },
