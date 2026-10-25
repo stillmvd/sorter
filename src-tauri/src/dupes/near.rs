@@ -239,6 +239,8 @@ fn key(conn: &Connection) -> rusqlite::Result<Key> {
     Ok((Scope::work(conn)?, crate::db::get_setting(conn, "deck_path")?, crate::db::get_setting(conn, "table_path")?))
 }
 
+type Done = (u64, FileInfo, Option<Print>);
+
 pub struct Printer {
     index: Option<Index>,
     version: i64,
@@ -247,11 +249,65 @@ pub struct Printer {
     key: Option<Key>,
     rates: [(f64, u32); 2],
     pub spent: [Duration; 4],
+    generation: u64,
+    busy: Vec<(u64, String)>,
+    sent: std::sync::mpsc::Sender<Done>,
+    done: std::sync::mpsc::Receiver<Done>,
+    last: Instant,
 }
+
+const WAIT: Duration = Duration::from_millis(500);
 
 impl Printer {
     pub fn new() -> Self {
-        Printer { index: None, version: -1, idle_until: None, queue: VecDeque::new(), key: None, rates: [(0.0, 0); 2], spent: [Duration::ZERO; 4] }
+        let (sent, done) = std::sync::mpsc::channel();
+        Printer {
+            index: None,
+            version: -1,
+            idle_until: None,
+            queue: VecDeque::new(),
+            key: None,
+            rates: [(0.0, 0); 2],
+            spent: [Duration::ZERO; 4],
+            generation: 0,
+            busy: Vec::new(),
+            sent,
+            done,
+            last: Instant::now(),
+        }
+    }
+
+    fn launch(&mut self) {
+        while self.busy.len() < crate::develop::workers() {
+            let Some(f) = self.queue.pop_front() else { return };
+            if !Path::new(&f.path).is_file() {
+                continue;
+            }
+            self.busy.push((self.generation, f.path.clone()));
+            let (sent, generation) = (self.sent.clone(), self.generation);
+            std::thread::spawn(move || {
+                crate::develop::prepare_thread();
+                let p = print::print(Path::new(&f.path));
+                let _ = sent.send((generation, f, p));
+            });
+        }
+    }
+
+    fn collect(&mut self) -> Vec<(FileInfo, Option<Print>)> {
+        let mut out = Vec::new();
+        let mut take = |me: &mut Self, (generation, f, p): Done| {
+            me.busy.retain(|b| !(b.0 == generation && b.1 == f.path));
+            if generation == me.generation {
+                out.push((f, p));
+            }
+        };
+        if let Ok(d) = self.done.recv_timeout(WAIT) {
+            take(self, d);
+            while let Ok(d) = self.done.try_recv() {
+                take(self, d);
+            }
+        }
+        out
     }
 
     pub fn step(&mut self, conn: &Connection, engine: Option<&mut Engine>) -> rusqlite::Result<Option<(usize, bool)>> {
@@ -260,38 +316,30 @@ impl Printer {
             self.queue.clear();
             self.idle_until = None;
             self.key = Some(now.clone());
+            self.generation += 1;
         }
         if now.0 == Scope::Off || self.idle_until.is_some_and(|t| Instant::now() < t) {
             return Ok(None);
         }
-        if self.queue.is_empty() {
+        let current = self.generation;
+        if self.queue.is_empty() && !self.busy.iter().any(|b| b.0 == current) {
             self.queue = unprinted(conn, scope_files(conn, &now.0)?)?.into();
         }
-        let mut batch = Vec::new();
-        while batch.len() < crate::develop::workers() {
-            let Some(f) = self.queue.pop_front() else { break };
-            if Path::new(&f.path).is_file() {
-                batch.push(f);
-            }
+        if self.busy.is_empty() {
+            self.last = Instant::now();
         }
-        if batch.is_empty() {
+        self.launch();
+        if !self.busy.iter().any(|b| b.0 == current) {
             self.idle_until = Some(Instant::now() + IDLE);
             return Ok(None);
         }
         let started = Instant::now();
-        let prints: Vec<Option<Print>> = std::thread::scope(|scope| {
-            let handles: Vec<_> = batch
-                .iter()
-                .map(|f| {
-                    scope.spawn(move || {
-                        crate::develop::prepare_thread();
-                        print::print(Path::new(&f.path))
-                    })
-                })
-                .collect();
-            handles.into_iter().map(|h| h.join().ok().flatten()).collect()
-        });
+        let (batch, prints): (Vec<FileInfo>, Vec<Option<Print>>) = self.collect().into_iter().unzip();
         self.spent[0] += started.elapsed();
+        self.launch();
+        if batch.is_empty() {
+            return Ok(Some((0, false)));
+        }
         let t = Instant::now();
         let vectors = embed_many(engine, &prints);
         self.spent[1] += t.elapsed();
@@ -348,7 +396,8 @@ impl Printer {
             }
             tx.commit()?;
         }
-        let per = started.elapsed() / batch.len() as u32;
+        let per = self.last.elapsed() / batch.len() as u32;
+        self.last = Instant::now();
         for f in &batch {
             self.learn(conn, crate::deck::photo_name(&f.path), per)?;
         }

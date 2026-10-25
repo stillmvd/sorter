@@ -500,6 +500,10 @@ pub mod mf {
     }
 
     pub fn decode(path: &Path) -> windows::core::Result<Decoded> {
+        video(path, true).or_else(|_| apart(path))
+    }
+
+    pub(super) fn apart(path: &Path) -> windows::core::Result<Decoded> {
         std::thread::scope(|scope| {
             let sound = scope.spawn(|| {
                 unsafe {
@@ -507,13 +511,55 @@ pub mod mf {
                 }
                 audio(&HSTRING::from(path.as_os_str())).unwrap_or_default()
             });
-            let mut d = video(path)?;
+            let mut d = video(path, false)?;
             d.mono = sound.join().unwrap_or_default();
             Ok(d)
         })
     }
 
-    fn video(path: &Path) -> windows::core::Result<Decoded> {
+    fn streams(reader: &IMFSourceReader) -> (Option<u32>, Option<u32>) {
+        let (mut v, mut a) = (None, None);
+        for i in 0..64u32 {
+            let Ok(t) = (unsafe { reader.GetNativeMediaType(i, 0) }) else { break };
+            let Ok(major) = (unsafe { t.GetMajorType() }) else { continue };
+            if major == MFMediaType_Video && v.is_none() {
+                v = Some(i);
+            }
+            if major == MFMediaType_Audio && a.is_none() {
+                a = Some(i);
+            }
+        }
+        (v, a)
+    }
+
+    fn audio_out(reader: &IMFSourceReader, stream: u32) -> windows::core::Result<(usize, Resampler)> {
+        unsafe {
+            let wanted = MFCreateMediaType()?;
+            wanted.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
+            wanted.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_Float)?;
+            reader.SetCurrentMediaType(stream, None, &wanted)?;
+            let current = reader.GetCurrentMediaType(stream)?;
+            let channels = current.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS)?.max(1) as usize;
+            let rate = current.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND)?;
+            Ok((channels, Resampler::new(rate)))
+        }
+    }
+
+    fn push_audio(sample: &IMFSample, channels: usize, rs: &mut Resampler) -> windows::core::Result<()> {
+        unsafe {
+            let buffer = sample.ConvertToContiguousBuffer()?;
+            let mut ptr = std::ptr::null_mut();
+            let mut len = 0u32;
+            buffer.Lock(&mut ptr, None, Some(&mut len))?;
+            let data = std::slice::from_raw_parts(ptr as *const f32, len as usize / 4);
+            for frame in data.chunks_exact(channels) {
+                rs.push(frame.iter().sum::<f32>() / channels as f32);
+            }
+            buffer.Unlock()
+        }
+    }
+
+    pub(super) fn video(path: &Path, with_audio: bool) -> windows::core::Result<Decoded> {
         unsafe {
             let mut attrs = None;
             MFCreateAttributes(&mut attrs, 3)?;
@@ -523,8 +569,17 @@ pub mod mf {
             let url = HSTRING::from(path.as_os_str());
             let reader = MFCreateSourceReaderFromURL(&url, &attrs)?;
             reader.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false)?;
-            reader.SetStreamSelection(VIDEO, true)?;
-            let native = reader.GetNativeMediaType(VIDEO, 0)?;
+            let (vi, ai) = if with_audio { streams(&reader) } else { (Some(VIDEO), None) };
+            let vi = vi.ok_or_else(|| windows::core::Error::from(MF_E_INVALIDSTREAMNUMBER))?;
+            reader.SetStreamSelection(vi, true)?;
+            let mut sound = ai.and_then(|a| {
+                let picked = reader.SetStreamSelection(a, true).and_then(|_| audio_out(&reader, a)).ok();
+                if picked.is_none() {
+                    let _ = reader.SetStreamSelection(a, false);
+                }
+                picked.map(|(channels, rs)| (a, channels, rs))
+            });
+            let native = reader.GetNativeMediaType(vi, 0)?;
             let rotation = native.GetUINT32(&MF_MT_VIDEO_ROTATION).unwrap_or(0);
             let size = native.GetUINT64(&MF_MT_FRAME_SIZE)?;
             let (w, h) = ((size >> 32) as u32, (size & 0xFFFF_FFFF) as u32);
@@ -536,7 +591,7 @@ pub mod mf {
             let turned = rotation == 90 || rotation == 270;
             let (ow, oh) = if turned { (oh, ow) } else { (ow, oh) };
             wanted.SetUINT64(&MF_MT_FRAME_SIZE, (ow as u64) << 32 | oh as u64)?;
-            reader.SetCurrentMediaType(VIDEO, None, &wanted)?;
+            reader.SetCurrentMediaType(vi, None, &wanted)?;
             let duration = reader
                 .GetPresentationAttribute(MF_SOURCE_READER_MEDIASOURCE.0 as u32, &MF_PD_DURATION)
                 .ok()
@@ -549,16 +604,35 @@ pub mod mf {
             let (mut grays, mut stills) = (Vec::new(), Vec::new());
             let mut empty = 0;
             let mut start = None;
+            let mut seen = false;
+            let mut mono = Vec::new();
             loop {
-                let (mut flags, mut ts, mut sample) = (0u32, 0i64, None);
-                reader.ReadSample(VIDEO, 0, None, Some(&mut flags), Some(&mut ts), Some(&mut sample))?;
-                if flags & EOS != 0 {
-                    break;
+                let (mut index, mut flags, mut ts, mut sample) = (vi, 0u32, 0i64, None);
+                let from = if sound.is_some() { MF_SOURCE_READER_ANY_STREAM.0 as u32 } else { vi };
+                reader.ReadSample(from, 0, Some(&mut index), Some(&mut flags), Some(&mut ts), Some(&mut sample))?;
+                if sound.as_ref().is_some_and(|s| s.0 == index) {
+                    let (a, channels, rs) = sound.as_mut().unwrap();
+                    if flags & EOS != 0 || sample.as_ref().is_some_and(|s| push_audio(s, *channels, rs).is_err()) {
+                        let _ = reader.SetStreamSelection(*a, false);
+                        mono = std::mem::take(&mut rs.out);
+                        sound = None;
+                        if seen {
+                            break;
+                        }
+                    }
+                    continue;
                 }
-                let Some(sample) = sample else {
+                if seen {
+                    continue;
+                }
+                let Some(sample) = sample.filter(|_| flags & EOS == 0) else {
                     empty += 1;
-                    if empty > 60 {
-                        break;
+                    if flags & EOS != 0 || empty > 60 {
+                        seen = true;
+                        if sound.is_none() {
+                            break;
+                        }
+                        let _ = reader.SetStreamSelection(vi, false);
                     }
                     continue;
                 };
@@ -584,7 +658,10 @@ pub mod mf {
             }
             let (width, height) = if rotation == 90 || rotation == 270 { (h, w) } else { (w, h) };
             let duration_ms = if duration > 0 { duration / 10_000 } else { grays.len() as i64 * 1000 / FPS };
-            Ok(Decoded { duration_ms, width, height, grays, stills, mono: Vec::new() })
+            if let Some((_, _, rs)) = sound {
+                mono = rs.out;
+            }
+            Ok(Decoded { duration_ms, width, height, grays, stills, mono })
         }
     }
 
@@ -593,30 +670,16 @@ pub mod mf {
             let reader = MFCreateSourceReaderFromURL(url, None)?;
             reader.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false)?;
             reader.SetStreamSelection(AUDIO, true)?;
-            let wanted = MFCreateMediaType()?;
-            wanted.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
-            wanted.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_Float)?;
-            reader.SetCurrentMediaType(AUDIO, None, &wanted)?;
-            let current = reader.GetCurrentMediaType(AUDIO)?;
-            let channels = current.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS)?.max(1) as usize;
-            let rate = current.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND)?;
-            let mut rs = Resampler::new(rate);
+            let (channels, mut rs) = audio_out(&reader, AUDIO)?;
             loop {
                 let (mut flags, mut sample) = (0u32, None);
                 reader.ReadSample(AUDIO, 0, None, Some(&mut flags), None, Some(&mut sample))?;
                 if flags & EOS != 0 {
                     break;
                 }
-                let Some(sample) = sample else { continue };
-                let buffer = sample.ConvertToContiguousBuffer()?;
-                let mut ptr = std::ptr::null_mut();
-                let mut len = 0u32;
-                buffer.Lock(&mut ptr, None, Some(&mut len))?;
-                let data = std::slice::from_raw_parts(ptr as *const f32, len as usize / 4);
-                for frame in data.chunks_exact(channels) {
-                    rs.push(frame.iter().sum::<f32>() / channels as f32);
+                if let Some(sample) = sample {
+                    push_audio(&sample, channels, &mut rs)?;
                 }
-                buffer.Unlock()?;
             }
             Ok(rs.out)
         }
@@ -679,6 +742,30 @@ mod tests {
 mod bench {
     use super::*;
     use std::time::Instant;
+
+    #[test]
+    #[ignore]
+    fn one_reader_matches_two() {
+        unsafe {
+            let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED);
+            let _ = windows::Win32::Media::MediaFoundation::MFStartup(
+                windows::Win32::Media::MediaFoundation::MF_VERSION,
+                windows::Win32::Media::MediaFoundation::MFSTARTUP_FULL,
+            );
+        }
+        let Ok(dir) = std::fs::read_dir(r"G:\vk videos") else { return };
+        let mut checked = 0;
+        for p in dir.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| !crate::deck::is_photo(p)).step_by(9).take(20) {
+            let (Ok(one), Ok(two)) = (mf::video(&p, true), mf::apart(&p)) else { continue };
+            assert_eq!(one.grays.len(), two.grays.len(), "{p:?}");
+            assert!(one.grays.iter().zip(&two.grays).all(|(a, b)| a == b), "{p:?}");
+            assert_eq!(one.stills.len(), two.stills.len(), "{p:?}");
+            assert_eq!(audio_print(&one.mono), audio_print(&two.mono), "{p:?}");
+            checked += 1;
+        }
+        println!("совпало {checked} видео");
+        assert!(checked > 0);
+    }
 
     #[test]
     #[ignore]
