@@ -1,6 +1,6 @@
 import { memo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { frameSrc, ipc, media, type Card } from "../../lib/ipc";
-import { FRAMES } from "../deck/FilmStrip";
+import { FRAMES } from "../deck/Scrub";
 
 const tc = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, "0")}`;
 

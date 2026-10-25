@@ -1,20 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { ipc, media, type Card as CardData } from "../../lib/ipc";
+import { Scrub, clock } from "./Scrub";
+import { Volume } from "./Volume";
 
-const tc = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+export type Size = { w: number; h: number };
 
-type Size = { w: number; h: number };
-
-function fit(zone: number, ratio: number): Size {
-  return ratio >= 1 ? { w: zone, h: Math.round(zone / ratio) } : { w: Math.round(zone * ratio), h: zone };
+function fit(box: Size, ratio: number): Size {
+  const w = Math.min(box.w, box.h * ratio);
+  return { w: Math.round(w), h: Math.round(w / ratio) };
 }
 
 function ratioOf(card: CardData, measured: Record<number, number>) {
   const r = measured[card.id] ?? (card.width && card.height ? card.width / card.height : card.kind === "photo" ? 4 / 3 : 9 / 16);
   return card.kind === "photo" ? Math.max(0.62, Math.min(1.6, r)) : r;
 }
-
-const ext = (name: string) => name.split(".").pop()?.toUpperCase() ?? "";
 
 export const seekStep = (seconds: number) => (seconds <= 20 ? 3 : seconds <= 60 ? 5 : seconds <= 300 ? 10 : 30);
 
@@ -24,11 +23,10 @@ export function seekBy(sign: number) {
   v.currentTime = Math.max(0, Math.min(v.duration - 0.05, v.currentTime + sign * seekStep(v.duration)));
 }
 
-export type SeriesBadge = { index: number; count: number; span: string; marked: boolean };
+export type SeriesBadge = { count: number; marked: boolean };
 
 function PhotoFace({
   card,
-  number,
   onRatio,
   onBroken,
   broken,
@@ -36,81 +34,75 @@ function PhotoFace({
 }: {
   series?: SeriesBadge;
   card: CardData;
-  number: number;
   onRatio: (r: number) => void;
   onBroken: () => void;
   broken: boolean;
 }) {
   const failed = broken || card.stage === "broken";
   return (
-    <div className="flex h-full flex-col gap-2.5 p-3">
-      <div className="flex items-center justify-between gap-3 px-1 pt-0.5 text-[#ececef]">
-        <span className="flex min-w-0 items-baseline gap-2">
-          <span className="text-[22px] leading-none font-bold">{number}</span>
-          {series && (
-            <span className="truncate text-[13px] font-medium text-[#a2a2a9]">
-              снимок {series.index + 1} из {series.count}
-            </span>
-          )}
+    <div className="relative grid h-full place-items-center">
+      {!failed && (
+        <img
+          src={media(card.path)}
+          alt=""
+          draggable={false}
+          decoding="async"
+          className="h-full w-full object-contain"
+          onLoad={(e) => {
+            const img = e.currentTarget;
+            if (img.naturalWidth && img.naturalHeight) onRatio(img.naturalWidth / img.naturalHeight);
+          }}
+          onError={onBroken}
+        />
+      )}
+      {series?.marked && (
+        <span className="absolute right-3.5 top-3.5 grid h-10 w-10 place-items-center rounded-full bg-[rgb(12_12_14/72%)]">
+          <svg width="24" height="26" viewBox="0 0 26 30" fill="none" stroke="#ececef" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 16c3 3 5 6 7 10C13 16 17 8 23 3" />
+          </svg>
         </span>
-        <span className="shrink-0 text-[11px] font-medium text-[#a2a2a9]">{series ? `Серия · ${series.span}` : `Фото · ${ext(card.fileName)}`}</span>
-      </div>
-      <div className="relative grid min-h-0 flex-1 place-items-center overflow-hidden rounded-2xl bg-[#141417]">
-        {!failed && (
-          <img
-            src={media(card.path)}
-            alt=""
-            draggable={false}
-            decoding="async"
-            className="max-h-full max-w-full rounded-md object-contain"
-            onLoad={(e) => {
-              const img = e.currentTarget;
-              if (img.naturalWidth && img.naturalHeight) onRatio(img.naturalWidth / img.naturalHeight);
-            }}
-            onError={onBroken}
-          />
-        )}
-        {series?.marked && (
-          <span className="absolute right-3.5 top-3.5 grid h-10 w-10 place-items-center rounded-full bg-[rgb(12_12_14/72%)]">
-            <svg width="24" height="26" viewBox="0 0 26 30" fill="none" stroke="#ececef" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 16c3 3 5 6 7 10C13 16 17 8 23 3" />
-            </svg>
-          </span>
-        )}
-        {failed && (
-          <div className="absolute inset-0 grid place-items-center p-4 text-center text-[13px] font-medium text-[#a2a2a9]">
-            {card.error ?? "Это фото не открывается внутри Sorter."}
-            <br />
-            Ctrl+O — открыть в просмотрщике
-          </div>
-        )}
-      </div>
+      )}
+      {failed && (
+        <div className="absolute inset-0 grid place-items-center p-4 text-center text-[13px] font-medium text-[#a2a2a9]">
+          {card.error ?? "Это фото не открывается внутри Sorter."}
+          <br />
+          Ctrl+O — открыть в просмотрщике
+        </div>
+      )}
     </div>
   );
 }
 
 function Face({
   card,
+  cacheDir,
+  tall,
   active,
   muted,
   paused,
-  number,
   onRatio,
   onBroken,
   broken,
   onTogglePause,
   volume,
+  onVolume,
+  onMute,
+  poke,
 }: {
-  volume: number;
-  onTogglePause: () => void;
   card: CardData;
+  cacheDir: string;
+  tall: boolean;
   active: boolean;
   muted: boolean;
   paused: boolean;
-  number: number;
   onRatio: (r: number) => void;
   onBroken: () => void;
   broken: boolean;
+  onTogglePause: () => void;
+  volume: number;
+  onVolume: (v: number) => void;
+  onMute: () => void;
+  poke: number;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [time, setTime] = useState({ t: 0, d: 0 });
@@ -163,91 +155,92 @@ function Face({
     return () => window.clearTimeout(timer);
   }, [active, src]);
 
+  const seek = (s: number) => {
+    const v = ref.current;
+    if (!v || !time.d) return;
+    v.currentTime = Math.max(0, Math.min(time.d - 0.05, s));
+    setTime({ t: v.currentTime, d: time.d });
+  };
+
   return (
-    <div className="flex h-full flex-col gap-2.5 p-3">
-      <div className="flex items-center justify-between px-1 pt-0.5 text-[#ececef]">
-        <span className="text-[22px] leading-none font-bold">{number}</span>
-        <span className="text-[11px] font-medium text-[#a2a2a9]">
-          {time.d ? `${tc(time.t)} / ${tc(time.d)}` : ""}
-          {muted ? "" : " · звук"}
-        </span>
-      </div>
-      <div className="relative min-h-0 flex-1 overflow-hidden rounded-2xl bg-[#1d1d21]">
-        {!broken && (
-          <video
-            ref={ref}
-            src={src}
-            crossOrigin="anonymous"
-            muted={muted}
-            loop
-            playsInline
-            preload="auto"
-            className="h-full w-full cursor-pointer object-contain"
-            onClick={active ? onTogglePause : undefined}
-            onLoadedMetadata={(e) => {
-              const v = e.currentTarget;
-              if (v.videoWidth && v.videoHeight) onRatio(v.videoWidth / v.videoHeight);
-              if (resume.current) v.currentTime = resume.current;
-              setTime({ t: resume.current, d: v.duration || 0 });
-            }}
-            onLoadedData={() => {
-              shown.current = true;
-            }}
-            onTimeUpdate={(e) => setTime({ t: e.currentTarget.currentTime, d: e.currentTarget.duration || 0 })}
-            onError={fail}
-          />
-        )}
-        {paused && active && !broken && (
-          <div className="pointer-events-none absolute inset-0 grid place-items-center">
-            <span className="grid h-14 w-14 place-items-center rounded-full bg-[rgb(12_12_14/70%)] text-[#ececef]">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" /></svg>
-            </span>
-          </div>
-        )}
-        {broken && (
-          <div className="absolute inset-0 grid place-items-center p-4 text-center text-[13px] font-medium text-[#a2a2a9]">
-            {stoppedAt === null ? "Это видео не играет внутри Sorter." : `Видео оборвалось на ${tc(stoppedAt)} — дальше файл не читается.`}
-            <br />
-            Ctrl+O — открыть в плеере
-          </div>
-        )}
-      </div>
-      <div className="h-1 rounded-full bg-[#2e2e33]">
-        <div className="h-1 rounded-full bg-[#ececef]" style={{ width: time.d ? `${(time.t / time.d) * 100}%` : 0 }} />
-      </div>
+    <div className="relative h-full">
+      {!broken && (
+        <video
+          ref={ref}
+          src={src}
+          crossOrigin="anonymous"
+          muted={muted}
+          loop
+          playsInline
+          preload="auto"
+          className="h-full w-full cursor-pointer object-contain"
+          onClick={active ? onTogglePause : undefined}
+          onLoadedMetadata={(e) => {
+            const v = e.currentTarget;
+            if (v.videoWidth && v.videoHeight) onRatio(v.videoWidth / v.videoHeight);
+            if (resume.current) v.currentTime = resume.current;
+            setTime({ t: resume.current, d: v.duration || 0 });
+          }}
+          onLoadedData={() => {
+            shown.current = true;
+          }}
+          onTimeUpdate={(e) => setTime({ t: e.currentTarget.currentTime, d: e.currentTarget.duration || 0 })}
+          onError={fail}
+        />
+      )}
+      {paused && active && !broken && (
+        <div className="pointer-events-none absolute inset-0 grid place-items-center">
+          <span className="grid h-14 w-14 place-items-center rounded-full bg-[rgb(12_12_14/70%)] text-[#ececef]">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" /></svg>
+          </span>
+        </div>
+      )}
+      {broken && (
+        <div className="absolute inset-0 grid place-items-center p-4 text-center text-[13px] font-medium text-[#a2a2a9]">
+          {stoppedAt === null ? "Это видео не играет внутри Sorter." : `Видео оборвалось на ${clock(stoppedAt)} — дальше файл не читается.`}
+          <br />
+          Ctrl+O — открыть в плеере
+        </div>
+      )}
+      {active && !broken && <Volume muted={muted} volume={volume} onMute={onMute} onVolume={onVolume} poke={poke} />}
+      {active && !broken && time.d > 0 && <Scrub card={card} cacheDir={cacheDir} tall={tall} t={time.t} d={time.d} onSeek={seek} />}
     </div>
   );
 }
 
 export function CardStack({
   cards,
-  number,
-  zone,
+  cacheDir,
+  box,
   muted,
   paused,
   broken,
   onBroken,
-  onPress,
   onTogglePause,
   volume,
+  onVolume,
+  onMute,
+  poke,
   series,
 }: {
-  series?: SeriesBadge;
-  volume: number;
-  onTogglePause: () => void;
   cards: CardData[];
-  number: number;
-  zone: number;
+  cacheDir: string;
+  box: Size;
   muted: boolean;
   paused: boolean;
   broken: Set<number>;
   onBroken: (id: number) => void;
-  onPress: (e: React.PointerEvent) => void;
+  onTogglePause: () => void;
+  volume: number;
+  onVolume: (v: number) => void;
+  onMute: () => void;
+  poke: number;
+  series?: SeriesBadge;
 }) {
   const [measured, setMeasured] = useState<Record<number, number>>({});
   const top = useRef<HTMLDivElement>(null);
   const current = cards[0];
-  const size = current ? fit(zone, ratioOf(current, measured)) : { w: 0, h: 0 };
+  const size = current ? fit(box, ratioOf(current, measured)) : { w: 0, h: 0 };
   const landscape = size.w > size.h;
   const prevLandscape = useRef(landscape);
 
@@ -271,16 +264,16 @@ export function CardStack({
   }, [landscape, current?.id]);
 
   return (
-    <div className="relative grid shrink-0 place-items-center" style={{ width: zone, height: zone }}>
+    <div className="relative grid h-full w-full place-items-center">
       {(cards.length > 1 || (series?.count ?? 0) > 1) && (
         <>
           <div
-            className="absolute rounded-[28px] bg-line transition-[width,height] duration-[320ms] ease-trail"
-            style={{ width: size.w, height: size.h, transform: "rotate(7deg) translate(16px, 6px)" }}
+            className="absolute rounded-[20px] bg-line transition-[width,height] duration-[320ms] ease-trail"
+            style={{ width: size.w, height: size.h, transform: "rotate(7deg) translate(16px, 6px) scale(0.94)" }}
           />
           <div
-            className="absolute rounded-[28px] bg-strong transition-[width,height] duration-[320ms] ease-trail"
-            style={{ width: size.w, height: size.h, transform: "rotate(3.5deg) translate(8px, 3px)" }}
+            className="absolute rounded-[20px] bg-strong transition-[width,height] duration-[320ms] ease-trail"
+            style={{ width: size.w, height: size.h, transform: "rotate(3.5deg) translate(8px, 3px) scale(0.97)" }}
           />
         </>
       )}
@@ -289,10 +282,9 @@ export function CardStack({
           key={card.id}
           ref={i === 0 ? top : undefined}
           data-card-top={i === 0 ? "" : undefined}
-          onPointerDown={i === 0 ? onPress : undefined}
           aria-hidden={i !== 0}
-          className={`absolute overflow-hidden rounded-[28px] border border-line bg-film shadow-[0_24px_60px_rgb(0_0_0/35%)] transition-[width,height] duration-[320ms] ease-trail ${
-            i === 0 ? "z-10 cursor-grab active:cursor-grabbing" : "pointer-events-none opacity-0"
+          className={`group absolute overflow-hidden rounded-[20px] bg-[#1d1d21] shadow-[0_24px_60px_rgb(0_0_0/35%)] transition-[width,height] duration-[320ms] ease-trail ${
+            i === 0 ? "z-10" : "pointer-events-none opacity-0"
           }`}
           style={{ width: size.w, height: size.h }}
         >
@@ -300,7 +292,6 @@ export function CardStack({
             <PhotoFace
               card={card}
               series={i === 0 ? series : undefined}
-              number={number + i}
               broken={broken.has(card.id)}
               onBroken={() => onBroken(card.id)}
               onRatio={(r) => setMeasured((m) => (m[card.id] === r ? m : { ...m, [card.id]: r }))}
@@ -308,14 +299,18 @@ export function CardStack({
           ) : (
             <Face
               card={card}
+              cacheDir={cacheDir}
+              tall={!landscape}
               active={i === 0}
               muted={muted}
               paused={paused}
-              number={number + i}
               broken={broken.has(card.id)}
               onBroken={() => onBroken(card.id)}
               onTogglePause={onTogglePause}
               volume={volume}
+              onVolume={onVolume}
+              onMute={onMute}
+              poke={poke}
               onRatio={(r) => setMeasured((m) => (m[card.id] === r ? m : { ...m, [card.id]: r }))}
             />
           )}

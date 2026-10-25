@@ -45,7 +45,7 @@ export function LastMove({ move, onUndo }: { move: Move | null; onUndo: () => vo
   const first = move?.items[0];
   const renamed = first?.finalName && first.finalName !== first.fileName;
   return (
-    <div className="flex w-[210px] shrink-0 flex-col justify-center gap-3">
+    <div className="flex min-w-0 flex-col justify-center gap-3">
       <div className="text-[13px] font-medium text-dim">Последний ход</div>
       {move && first ? (
         <div className="flex items-center gap-3">

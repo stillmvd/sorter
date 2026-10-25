@@ -2,10 +2,10 @@ import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Copy, CopyX, Folder, FolderOpen, History, Image as ImageIcon, LayoutGrid, Layers, Loader2, Plus, Search, Settings, Video } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { errorText, ipc, mergeCards, onCards, onDeckChanged, onDupesChanged, onPilesChanged, onProgress, onSeries, type AppState, type Card, type DupeGroup, type DupeGroups, type DupeView, type GroupItem, type Kind, type Method, type Move, type Pile, type SeriesView } from "../../lib/ipc";
-import { SeriesPanel, seriesSpan, type Rest } from "./SeriesPanel";
+import { SeriesPanel, type Rest } from "./SeriesPanel";
 import { KindFilter } from "../ui/KindFilter";
 import { isPhotoPath } from "../../lib/ipc";
-import { PhotoFacts } from "./PhotoFacts";
+import { Facts } from "./Facts";
 import { isTypingChar, keyOf } from "../../lib/keys";
 import { cardsWord, plural } from "../../lib/plural";
 import { useHints } from "../../lib/useHints";
@@ -17,14 +17,12 @@ import { DupeBadge } from "./DupeBadge";
 import { play } from "../../lib/sound";
 import { pressToDrag } from "../fx/Drag";
 import { Flights, motionOff, pileElement, shake, snapshot, type Flight } from "../fx/Flight";
-import { FilmStrip } from "./FilmStrip";
 import { KeysHint } from "./KeyLegend";
 import { PileMenu } from "./PileMenu";
-import { VolumeRow } from "./VolumeRow";
 import { Button } from "../ui/Button";
 import { PageHeader, Tag } from "../ui/PageHeader";
 import { SearchField } from "../ui/SearchField";
-import { CardStack, seekBy } from "./Card";
+import { CardStack, seekBy, type Size } from "./Card";
 import { LastMove, LastMoveLine } from "./LastMove";
 import { ContactSheet } from "../table/ContactSheet";
 import { Segment } from "../ui/Segment";
@@ -38,8 +36,6 @@ import { FindDupes, type SearchSet } from "../dupes/FindDupes";
 import { SearchBanner } from "../dupes/SearchBanner";
 import { dupesSetting, widened, type DupesSetting } from "../screens/DupesStep";
 
-const mb = (b: number) => `${(b / 1024 ** 2).toFixed(1).replace(".", ",")} МБ`;
-const date = (ms: number) => new Date(ms).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
 
 type Mode = "deck" | "table" | "dupes";
 
@@ -106,7 +102,8 @@ export function DeckScreen({
   const [menu, setMenu] = useState<{ pile: Pile; x: number; y: number } | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
   const [broken, setBroken] = useState<Set<number>>(() => new Set());
-  const [zone, setZone] = useState(420);
+  const [zone, setZone] = useState<Size>({ w: 420, h: 420 });
+  const [poke, setPoke] = useState(0);
   const [flights, setFlights] = useState<Flight[]>([]);
   const [developing, setDeveloping] = useState(initial.developing);
   const [mode, setMode] = useState<Mode>(initial.settings.mode === "table" || initial.settings.mode === "dupes" ? initial.settings.mode : "deck");
@@ -332,7 +329,8 @@ export function DeckScreen({
     centerObserver.current = null;
     if (!el) return;
     const ro = new ResizeObserver(([entry]) => {
-      if (entry.contentRect.height > 0) setZone(Math.max(240, Math.min(entry.contentRect.height, 560)));
+      const { width, height } = entry.contentRect;
+      if (height > 0) setZone({ w: Math.max(240, width), h: Math.max(240, height) });
     });
     ro.observe(el);
     centerObserver.current = ro;
@@ -614,18 +612,6 @@ export function DeckScreen({
     });
   }, []);
 
-  const pressCard = (e: PointerEvent) => {
-    pressToDrag(e, {
-      ...dropHandlers,
-      prepare: () => {
-        const snap = snapshot();
-        const grabbed = document.querySelector<HTMLElement>("[data-card-top]");
-        if (!grabbed) return null;
-        return { pieces: [{ el: grabbed, image: snap?.image ?? null }], grabbed, count: 1, radius: 28 };
-      },
-    });
-  };
-
   const newPile = useCallback(async () => {
     const name = query.trim();
     if (!name) return;
@@ -823,6 +809,7 @@ export function DeckScreen({
     if (e.key === "ArrowUp" || e.key === "ArrowDown") {
       e.preventDefault();
       changeVolume((muted ? 0 : volume) + (e.key === "ArrowUp" ? 0.1 : -0.1));
+      setPoke((p) => p + 1);
       return;
     }
     if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && current?.kind === "video") {
@@ -851,6 +838,7 @@ export function DeckScreen({
     if (k === "M") {
       e.preventDefault();
       toggleMute();
+      setPoke((p) => p + 1);
       return;
     }
     if (isTypingChar(e)) {
@@ -866,7 +854,6 @@ export function DeckScreen({
     return () => window.removeEventListener("keydown", listen);
   }, []);
 
-  const number = counts.placed + 1;
   const empty = mode === "deck" ? loaded && !current : sheetLoaded && sheet.length === 0;
   const kindCounts: Record<Kind, number> = { all: counts.left, video: counts.byKind.video.left, photo: counts.byKind.photo.left };
   const mixed = counts.byKind.video.left + counts.byKind.video.placed > 0 && counts.byKind.photo.left + counts.byKind.photo.placed > 0;
@@ -1008,75 +995,55 @@ export function DeckScreen({
           onVisible={setOnScreen}
         />
       ) : (
-        <div ref={center} className="flex min-h-0 flex-1 items-stretch gap-12">
+        <div className="grid min-h-0 flex-1 grid-cols-[clamp(240px,22vw,320px)_minmax(0,1fr)_clamp(240px,22vw,320px)] grid-rows-[minmax(0,1fr)] gap-8">
           <LastMove move={last} onUndo={undo} />
-          {!loaded && (
-            <div className="flex flex-1 items-center justify-center">
-              <div className="flex aspect-[0.62] h-[min(64vh,520px)] flex-col items-center justify-center gap-3 rounded-[28px] border border-line bg-film text-[13px] font-medium text-[#a2a2a9]">
+          <div ref={center} className="grid min-h-0 min-w-0 place-items-center">
+            {!loaded && (
+              <div className="flex aspect-[0.62] h-[min(64vh,520px)] flex-col items-center justify-center gap-3 rounded-[20px] bg-film text-[13px] font-medium text-[#a2a2a9]">
                 <Loader2 className="h-6 w-6 animate-spin" strokeWidth={1.5} />
                 Достаю карты из колоды…
               </div>
-            </div>
-          )}
+            )}
+            {current && (
+              <CardStack
+                cards={shownCards}
+                cacheDir={initial.cacheDir}
+                series={cur ? { count: cur.cards.length, marked: focusCard ? marked.has(focusCard.id) : false } : undefined}
+                box={zone}
+                muted={muted}
+                paused={paused}
+                broken={broken}
+                onBroken={(id) => setBroken((b) => new Set(b).add(id))}
+                onTogglePause={() => setPaused((p) => !p)}
+                volume={volume}
+                onVolume={changeVolume}
+                onMute={toggleMute}
+                poke={poke}
+              />
+            )}
+          </div>
           {current && (
-            <CardStack
-              cards={shownCards}
-              series={
-                cur
-                  ? {
-                      index: focus,
-                      count: cur.cards.length,
-                      span: (({ from, to }) => `${from} – ${to}`)(seriesSpan(cur)),
-                      marked: focusCard ? marked.has(focusCard.id) : false,
-                    }
-                  : undefined
-              }
-              number={number}
-              zone={zone}
-              muted={muted}
-              paused={paused}
-              broken={broken}
-              onBroken={(id) => setBroken((b) => new Set(b).add(id))}
-              onTogglePause={() => setPaused((p) => !p)}
-              volume={volume}
-              onPress={pressCard}
-            />
-          )}
-          {current && (
-            <div className="flex min-w-0 flex-1 flex-col justify-center-safe gap-3 overflow-y-auto">
-              <div className="flex flex-col gap-1">
-                <div className="flex min-w-0 items-center gap-2">
-                  <span
-                    title={`${(focusCard ?? current).kind === "photo" ? "Фото" : "Видео"} · ${(focusCard ?? current).fileName.split(".").pop()?.toUpperCase()}`}
-                    className="flex h-6 shrink-0 items-center gap-1.5 rounded-md bg-fg px-2 text-[11px] font-bold tracking-[0.04em] text-ink"
-                  >
-                    {(focusCard ?? current).kind === "photo" ? <ImageIcon className="h-3.5 w-3.5" strokeWidth={2} /> : <Video className="h-3.5 w-3.5" strokeWidth={2} />}
-                    {(focusCard ?? current).fileName.split(".").pop()?.toUpperCase()}
-                  </span>
-                  <div className="min-w-0 truncate text-lg font-bold" title={(focusCard ?? current).fileName}>
-                    {(focusCard ?? current).fileName}
-                  </div>
-                  <button
-                    type="button"
-                    aria-label="Показать в проводнике"
-                    title="Показать в проводнике — Ctrl E"
-                    onClick={() => revealItemInDir((focusCard ?? current).path)}
-                    className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-dim transition-colors duration-200 ease-trail hover:bg-raised hover:text-fg"
-                  >
-                    <FolderOpen className="h-4 w-4" strokeWidth={1.5} />
-                  </button>
+            <div className="flex min-w-0 flex-col justify-center-safe gap-3 overflow-y-auto">
+              <div className="flex min-w-0 items-center gap-2">
+                <span
+                  title={`${(focusCard ?? current).kind === "photo" ? "Фото" : "Видео"} · ${(focusCard ?? current).fileName.split(".").pop()?.toUpperCase()}`}
+                  className="flex h-6 shrink-0 items-center gap-1.5 rounded-md bg-fg px-2 text-[11px] font-bold tracking-[0.04em] text-ink"
+                >
+                  {(focusCard ?? current).kind === "photo" ? <ImageIcon className="h-3.5 w-3.5" strokeWidth={2} /> : <Video className="h-3.5 w-3.5" strokeWidth={2} />}
+                  {(focusCard ?? current).fileName.split(".").pop()?.toUpperCase()}
+                </span>
+                <div className="min-w-0 truncate text-lg font-bold" title={(focusCard ?? current).fileName}>
+                  {(focusCard ?? current).fileName}
                 </div>
-                {current.kind === "video" && (
-                  <div className="text-[13px] font-medium text-dim">
-                    {[
-                      current.takenAt ? date(current.takenAt) : null,
-                      mb(current.size),
-                      current.width && current.height ? `${current.width}×${current.height}` : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </div>
-                )}
+                <button
+                  type="button"
+                  aria-label="Показать в проводнике"
+                  title="Показать в проводнике — Ctrl E"
+                  onClick={() => revealItemInDir((focusCard ?? current).path)}
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-dim transition-colors duration-200 ease-trail hover:bg-raised hover:text-fg"
+                >
+                  <FolderOpen className="h-4 w-4" strokeWidth={1.5} />
+                </button>
               </div>
               {cur ? (
                 <SeriesPanel
@@ -1090,10 +1057,8 @@ export function DeckScreen({
                   onRest={changeRest}
                   onSplit={() => void splitSeries()}
                 />
-              ) : current.kind === "photo" ? (
-                <PhotoFacts card={current} />
               ) : (
-                <FilmStrip card={current} cacheDir={initial.cacheDir} />
+                <Facts card={current} />
               )}
               {dupe ? (
                 <DupeBadge
@@ -1127,8 +1092,6 @@ export function DeckScreen({
                     {current.kind === "photo" ? "Открыть в просмотрщике" : "Открыть в плеере"}
                   </Button>
                 )}
-                <div className="flex-1" />
-                {current.kind === "video" && <VolumeRow muted={muted} volume={volume} onMute={toggleMute} onVolume={changeVolume} />}
               </div>
             </div>
           )}

@@ -66,10 +66,10 @@ function Ghost({ flight, onDone }: { flight: Flight; onDone: (f: Flight) => void
   return (
     <div
       ref={ref}
-      className="pointer-events-none fixed z-50 overflow-hidden rounded-[28px] border border-line bg-film shadow-[0_24px_60px_rgb(0_0_0/35%)]"
+      className="pointer-events-none fixed z-50 overflow-hidden rounded-[20px] bg-[#1d1d21] shadow-[0_24px_60px_rgb(0_0_0/35%)]"
       style={{ left: flight.from.left, top: flight.from.top, width: flight.from.width, height: flight.from.height }}
     >
-      {flight.image && <img src={flight.image} alt="" className="h-full w-full object-contain p-3" />}
+      {flight.image && <img src={flight.image} alt="" className="h-full w-full object-contain" />}
     </div>
   );
 }

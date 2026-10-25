@@ -25,7 +25,7 @@ export function PilesRow({
   dragOver: number | null;
 }) {
   return (
-    <div className="grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] items-end gap-2.5 pt-3">
+    <div className="grid grid-cols-8 items-end gap-x-2.5 gap-y-[18px] pt-3">
       {piles.map((p) => {
         const lit = p.id === hot || p.id === dragOver;
         return (
@@ -39,7 +39,7 @@ export function PilesRow({
               e.preventDefault();
               if (!p.isTrash) onMenu(p, e.clientX, e.clientY);
             }}
-            className={`flex h-[84px] flex-col justify-between rounded-2xl px-3 py-2.5 text-left transition-[transform,background-color,opacity] duration-200 ease-trail ${
+            className={`flex h-[72px] min-w-0 flex-col justify-between rounded-2xl px-3 py-2.5 text-left transition-[transform,background-color,opacity] duration-200 ease-trail ${
               lit ? "-translate-y-2 bg-fg text-ink outline-[1.5px] outline-offset-4 outline-fg outline-dashed" : p.isTrash ? "border-[1.5px] border-dashed border-line bg-transparent" : "bg-raised"
             } ${dim && !dim.has(p.id) && !lit ? "opacity-30" : ""}`}
             style={{ boxShadow: p.isTrash ? "none" : stack(p.count) }}
