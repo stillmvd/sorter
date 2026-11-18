@@ -271,7 +271,7 @@ export function Develop({ state, purpose, onDone, onCancel }: { state: AppState;
           {search ? "К дублям" : "Раскладывать"}
         </Button>
         <Button variant="ghost" size={40} hotkey="Esc" onClick={onCancel} className="-mt-1 text-dim">
-          {purpose === "deck" ? "Выбрать другую папку" : "Отменить поиск"}
+          {purpose === "deck" ? "На главный" : "Отменить поиск"}
         </Button>
       </aside>
     </main>

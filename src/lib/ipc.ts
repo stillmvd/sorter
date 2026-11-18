@@ -7,6 +7,7 @@ export type Card = {
   id: number;
   fileName: string;
   path: string;
+  origin: string;
   size: number;
   takenAt: number | null;
   durationMs: number | null;
@@ -36,7 +37,7 @@ export type Pile = {
   examples: number;
 };
 
-export type Method = "key" | "hint" | "search" | "table" | "drag" | "new_pile";
+export type Method = "key" | "hint" | "search" | "table" | "drag" | "new_pile" | "dirs";
 
 export type MoveItem = {
   cardId: number | null;
@@ -55,6 +56,7 @@ export type Move = {
   isTrash: boolean;
   state: "pending" | "done" | "undoing" | "undone" | "failed";
   error: string | null;
+  review: string | null;
   items: MoveItem[];
 };
 
@@ -135,7 +137,7 @@ export const placeLabel = (d: GroupItem) =>
   d.where === "pile" ? `в стопке «${pileLabel(d)}»` : d.where === "folder" ? `в папке ${d.folder ?? ""}` : "в колоде";
 
 export type Settings = Partial<
-  Record<"deck_path" | "table_path" | "hints_enabled" | "theme" | "muted" | "mode" | "volume" | "kind_filter" | "series_rest" | "dupes_enabled" | "dupes_scope" | "dupe_search", string>
+  Record<"review_id" | "table_path" | "hints_enabled" | "theme" | "muted" | "mode" | "volume" | "kind_filter" | "series_rest" | "dupes_enabled" | "dupes_scope" | "dupe_search", string>
 >;
 
 export type KindCounts = { left: number; placed: number };
@@ -161,8 +163,39 @@ export type AppState = {
   settings: Settings;
   deck: { total: number; left: number; placed: number; byKind: { video: KindCounts; photo: KindCounts } };
   piles: Pile[];
-  missing: ("deck" | "table")[];
+  missing: ("table" | "deck")[];
+  review: string | null;
 };
+
+export type RootView = {
+  path: string;
+  name: string;
+  dirs: number;
+  video: number;
+  photo: number;
+  online: boolean;
+  reading: number | null;
+};
+
+export type TableView = { path: string; name: string; piles: number; online: boolean };
+
+export type RootError = { path: string; code: string; message: string; reviewId: number | null };
+
+export type Draft = { roots: RootView[]; table: TableView | null; errors: RootError[] };
+
+export type ReviewView = {
+  id: number;
+  label: string;
+  roots: RootView[];
+  table: string;
+  left: number;
+  total: number;
+  openedAt: number;
+  next: Card | null;
+  online: boolean;
+};
+
+export type Home = { draft: Draft; reviews: ReviewView[]; last: number | null };
 
 export type AppError = { code: string; message: string };
 
@@ -187,7 +220,9 @@ export const onDeckChanged = (fn: (d: { added: Card[]; gone: number[] }) => void
   listen<{ added: Card[]; gone: number[] }>("deck://changed", (e) => fn(e.payload));
 export const onPilesChanged = (fn: (p: Pile[]) => void) => listen<Pile[]>("piles://changed", (e) => fn(e.payload));
 export const onHintsChanged = (fn: () => void) => listen("hints://changed", () => fn());
-export const onReading = (fn: (found: number) => void) => listen<number>("deck://reading", (e) => fn(e.payload));
+export const onReading = (fn: (r: { path: string; found: number }) => void) =>
+  listen<{ path: string; found: number }>("deck://reading", (e) => fn(e.payload));
+export const onRoots = (fn: () => void) => listen("deck://roots", () => fn());
 export const onSeries = (fn: () => void) => listen("deck://series", () => fn());
 export const onDupesChanged = (fn: () => void) => listen("dupes://changed", () => fn());
 export const onOpenFolder = (fn: (path: string) => void) => listen<string>("open://folder", (e) => fn(e.payload));
@@ -196,9 +231,16 @@ export const onProgress = (fn: (p: Developing) => void) => listen<Developing>("d
 export const ipc = {
   getState: () => invoke<AppState>("get_state"),
   takeIncoming: () => invoke<string | null>("take_incoming"),
-  chooseDeck: (path: string) => invoke<{ count: number; bytes: number }>("choose_deck", { path }),
-  cancelDeck: () => invoke<void>("cancel_deck"),
-  chooseTable: (path: string) => invoke<Pile[]>("choose_table", { path }),
+  home: () => invoke<Home>("home"),
+  addRoots: (paths: string[]) => invoke<Draft>("add_roots", { paths }),
+  removeRoot: (path: string) => invoke<Draft>("remove_root", { path }),
+  setDraftTable: (path: string) => invoke<Draft>("set_draft_table", { path }),
+  stopReading: () => invoke<void>("stop_reading"),
+  startReview: () => invoke<ReviewView>("start_review"),
+  openReview: (id: number) => invoke<ReviewView>("open_review", { id }),
+  dropReview: (id: number) => invoke<void>("drop_review", { id }),
+  closeReview: () => invoke<void>("close_review"),
+  recheck: () => invoke<Home>("recheck"),
   setSetting: (key: string, value: string) => invoke<void>("set_setting_cmd", { key, value }),
   deckWindow: (from: number, count: number, kind: Kind = "all") => invoke<Card[]>("deck_window", { from, count, kind }),
   deckSeries: () => invoke<SeriesView[]>("deck_series"),
@@ -225,6 +267,8 @@ export const ipc = {
   dupeGroups: () => invoke<DupeGroups>("dupe_groups"),
   playable: (cardId: number) => invoke<string>("playable", { cardId }),
   trashCopies: (paths: string[]) => invoke<{ move: Move; piles: Pile[] }>("trash_copies", { paths }),
+  emptyDirs: () => invoke<string[]>("empty_dirs"),
+  trashDirs: (paths: string[]) => invoke<{ move: Move; piles: Pile[] }>("trash_dirs", { paths }),
   replaceCopy: (cardId: number, worsePath: string) =>
     invoke<{ move: Move; piles: Pile[] }>("replace_copy", { cardId, worsePath }),
   developControl: (pause: boolean) => invoke<void>("develop_control", { pause }),

@@ -1,7 +1,5 @@
-import { open } from "@tauri-apps/plugin-dialog";
-import { Folder } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { errorText, ipc, type AppState } from "../../lib/ipc";
+import { ipc, type AppState } from "../../lib/ipc";
 import { plural } from "../../lib/plural";
 import { Button } from "../ui/Button";
 import { BackButton, Heading } from "../ui/PageHeader";
@@ -46,7 +44,6 @@ export function SettingsScreen({
   onBack: () => void;
   onWiden: (before: DupesSetting) => void;
 }) {
-  const [errors, setErrors] = useState<{ deck?: string; table?: string }>({});
   const [cache, setCache] = useState<{ bytes: number; cards: number } | null>(null);
   const [freed, setFreed] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
@@ -77,19 +74,6 @@ export function SettingsScreen({
     await onChange();
   };
 
-  const pick = async (which: "deck" | "table") => {
-    const path = await open({ directory: true, title: which === "deck" ? "Откуда брать видео?" : "Куда раскладывать?" });
-    if (typeof path !== "string") return;
-    try {
-      if (which === "deck") await ipc.chooseDeck(path);
-      else await ipc.chooseTable(path);
-      setErrors((e) => ({ ...e, [which]: undefined }));
-      await onChange();
-    } catch (e) {
-      setErrors((x) => ({ ...x, [which]: errorText(e) }));
-    }
-  };
-
   const clear = async () => {
     clearTimeout(confirmTimer.current);
     if (!confirm) {
@@ -106,23 +90,6 @@ export function SettingsScreen({
       setBusy(false);
     }
   };
-
-  const folders = [
-    {
-      which: "deck" as const,
-      k: "Откуда брать видео — колода",
-      path: state.settings.deck_path ?? "",
-      count: `${state.deck.left} в колоде`,
-      msg: "Берутся только видео в самой папке, без вложенных. Новые видео Sorter подхватывает сам, пока открыт.",
-    },
-    {
-      which: "table" as const,
-      k: "Куда раскладывать — стол",
-      path: state.settings.table_path ?? "",
-      count: `${piles.length} ${plural(piles.length, "стопка", "стопки", "стопок")}`,
-      msg: "Каждая папка внутри — стопка. Клавиши и подсказки у каждого стола свои: на новом столе подсказки начнут учиться заново.",
-    },
-  ];
 
   return (
     <main className="mx-2 mb-2 flex min-h-0 flex-1 flex-col gap-7 overflow-y-auto rounded-[28px] bg-cosmic px-10 py-7">
@@ -164,41 +131,6 @@ export function SettingsScreen({
         <div className="col-span-2">
           <DupesStep state={state} onChanged={(before, after) => (widened(before, after) ? onWiden(before) : void onChange())} />
         </div>
-
-        <Tile
-          wide
-          title="Папки"
-          note="Смена папки ничего не переносит — Sorter начинает смотреть в новую. Вернёшь прежнюю — всё будет как было. Колода и стол не могут лежать друг в друге."
-        >
-          <div className="flex flex-col gap-2.5">
-            {folders.map((f) => {
-              const error = errors[f.which];
-              return (
-                <div
-                  key={f.which}
-                  className={`flex flex-col gap-2.5 rounded-2xl bg-cosmic py-3.5 pr-3 pl-[18px] ${error ? "outline-[1.5px] -outline-offset-[1.5px] outline-fg outline-solid" : ""}`}
-                >
-                  <div className="flex items-center gap-4">
-                    <Folder size={18} strokeWidth={1.5} className="shrink-0" />
-                    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                      <span className="text-xs font-medium text-dim">{f.k}</span>
-                      <span className="truncate text-[15px] font-bold" title={f.path}>
-                        {f.path}
-                      </span>
-                    </div>
-                    <span className="shrink-0 text-[13px] text-dim">{f.count}</span>
-                    <Button className="bg-strong! hover:bg-line!" onClick={() => void pick(f.which)}>
-                      Сменить папку
-                    </Button>
-                  </div>
-                  <p role={error ? "alert" : undefined} className={`m-0 pl-[34px] text-[13px] leading-[1.5] ${error ? "font-medium text-fg" : "text-dim"}`}>
-                    {error ?? f.msg}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-        </Tile>
 
         <Tile title="Кэш проявки" note="Раскадровки и починенные копии видео. Карты открытой колоды останутся, остальное проявится заново, когда понадобится.">
           <div className="flex items-center gap-4">

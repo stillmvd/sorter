@@ -32,6 +32,8 @@ function how(move: Move, piles: Pile[]) {
       return "перетаскивание";
     case "new_pile":
       return "новая стопка";
+    case "dirs":
+      return `пустые папки · ${move.items.length}`;
   }
 }
 
@@ -46,7 +48,7 @@ function Thumb({ cacheDir, cardId }: { cacheDir: string; cardId: number | null }
   );
 }
 
-export function JournalScreen({ cacheDir, deckPath, onBack }: { cacheDir: string; deckPath: string; onBack: () => void }) {
+export function JournalScreen({ cacheDir, onBack }: { cacheDir: string; onBack: () => void }) {
   const [moves, setMoves] = useState<Move[]>([]);
   const [piles, setPiles] = useState<Pile[]>([]);
   const [total, setTotal] = useState(0);
@@ -122,7 +124,7 @@ export function JournalScreen({ cacheDir, deckPath, onBack }: { cacheDir: string
           <BackButton onClick={onBack} />
           <Heading light="Журнал," bold={`${total} ${plural(total, "ход", "хода", "ходов")}`} />
           <p className="m-0 max-w-[80ch] text-[15px] leading-[1.55] text-dim">
-            {notice ?? `Любой ход можно забрать: карта вернётся в колоду, файл — в ${deckPath}.`}
+            {notice ?? "Забери любой ход: карта вернётся в колоду, файл — на прежнее место"}
           </p>
         </div>
         <Button icon={<Undo2 size={16} strokeWidth={1.5} />} onClick={() => void undoToday()} disabled={!hasToday}>
@@ -162,7 +164,7 @@ export function JournalScreen({ cacheDir, deckPath, onBack }: { cacheDir: string
                   {move.isTrash && <Trash2 size={15} strokeWidth={1.5} className="shrink-0" />}
                   {move.pileName}
                 </span>
-                <span className="shrink-0 text-xs font-medium text-dim">{status ?? how(move, piles)}</span>
+                <span className="shrink-0 text-xs font-medium text-dim">{[move.review, status ?? how(move, piles)].filter(Boolean).join(" · ")}</span>
                 {move.state === "done" && first ? (
                   <Button size={40} className="bg-strong! hover:bg-line!" onClick={() => void undo(move)}>
                     Забрать

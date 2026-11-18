@@ -1,53 +1,60 @@
 import { UpdateToast } from "@stillmvd/tauri-ship";
-import { open } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Titlebar } from "./components/Titlebar";
 import { DeckScreen } from "./components/deck/DeckScreen";
-import { ExplorerBar } from "./components/deck/ExplorerBar";
 import { Develop } from "./components/screens/Develop";
+import { Home } from "./components/screens/Home";
 import { JournalScreen } from "./components/screens/Journal";
 import { PilesScreen } from "./components/screens/Piles";
 import type { DupesSetting } from "./components/screens/DupesStep";
 import { SettingsScreen } from "./components/screens/Settings";
-import { Start } from "./components/screens/Start";
 import { errorText, ipc, onOpenFolder, type AppState } from "./lib/ipc";
+
+type Screen = "deck" | "piles" | "journal" | "settings";
 
 export default function App() {
   const [state, setState] = useState<AppState | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
-  const [started, setStarted] = useState(false);
-  const [home, setHome] = useState(false);
+  const [view, setView] = useState<"home" | "review">("home");
   const [develop, setDevelop] = useState<"deck" | "dupes" | "search" | null>(null);
+  const [screen, setScreen] = useState<Screen>("deck");
+  const [incoming, setIncoming] = useState<string[] | null>(null);
   const revert = useRef<DupesSetting | null>(null);
-  const developView = develop !== null;
-  const [screen, setScreen] = useState<"deck" | "piles" | "journal" | "settings">("deck");
 
   const reload = useCallback(async () => {
     try {
-      setState(await ipc.getState());
+      const s = await ipc.getState();
+      setState(s);
+      return s;
     } catch (e) {
       setFailure(errorText(e));
+      return null;
     }
   }, []);
 
   useEffect(() => {
-    void reload();
+    void ipc
+      .closeReview()
+      .catch(() => undefined)
+      .then(reload);
   }, [reload]);
 
-  const [explorer, setExplorer] = useState<{ path: string; error?: string } | null>(null);
+  const goHome = useCallback(async () => {
+    await ipc.closeReview().catch(() => undefined);
+    revert.current = null;
+    setDevelop(null);
+    setScreen("deck");
+    setView("home");
+    await reload();
+  }, [reload]);
 
   const openFolder = useCallback(
     async (path: string) => {
-      try {
-        await ipc.chooseDeck(path);
-        setExplorer({ path });
-      } catch (e) {
-        setExplorer({ path, error: errorText(e) });
-      }
-      setScreen("deck");
-      await reload();
+      if (view === "review") await goHome();
+      else setScreen("deck");
+      setIncoming([path]);
     },
-    [reload],
+    [view, goHome],
   );
 
   useEffect(() => {
@@ -58,50 +65,40 @@ export default function App() {
     return () => void off.then((f) => f());
   }, [openFolder]);
 
-  const pickTable = useCallback(async () => {
-    if (!explorer) return;
-    const path = await open({ directory: true, title: "Куда раскладывать?" });
-    if (typeof path !== "string") return;
-    try {
-      await ipc.chooseTable(path);
-      if (explorer.error) await ipc.chooseDeck(explorer.path);
-      setExplorer({ path: explorer.path });
-    } catch (e) {
-      setExplorer({ ...explorer, error: errorText(e) });
-    }
-    await reload();
-  }, [explorer, reload]);
-
   useEffect(() => {
     const theme = state?.settings.theme;
     if (theme === "dark" || theme === "light") document.documentElement.dataset.theme = theme;
     else delete document.documentElement.dataset.theme;
   }, [state?.settings.theme]);
 
-  const lastDeck = useRef<string | undefined>(undefined);
+  const opened = useCallback(async () => {
+    const s = await reload();
+    if (!s) return;
+    setIncoming(null);
+    setDevelop(s.developing.ready ? null : s.developing.search ? "search" : "deck");
+    setScreen("deck");
+    setView("review");
+  }, [reload]);
+
   useEffect(() => {
-    const deck = state?.settings.deck_path;
-    if (!state) return;
-    if (!deck) {
-      lastDeck.current = undefined;
-      return;
-    }
-    if (lastDeck.current !== deck) {
-      setDevelop(state.developing.ready ? null : state.developing.search ? "search" : "deck");
-      setScreen("deck");
-    }
-    lastDeck.current = deck;
-  }, [state]);
+    if (view === "review" && state?.missing.length) void goHome();
+  }, [view, state?.missing.length, goHome]);
+
+  const refresh = useCallback(() => void reload(), [reload]);
+  const toJournal = useCallback(() => setScreen("journal"), []);
+  const toSettings = useCallback(() => setScreen("settings"), []);
 
   const back = useCallback(() => void reload().then(() => setScreen("deck")), [reload]);
 
   const widen = useCallback(
     (before: DupesSetting) => {
       revert.current = before;
-      setDevelop("dupes");
-      void reload().then(() => setScreen("deck"));
+      void reload().then(() => {
+        if (view === "review") setDevelop("dupes");
+        setScreen("deck");
+      });
     },
-    [reload],
+    [reload, view],
   );
 
   const search = useCallback(() => {
@@ -110,36 +107,36 @@ export default function App() {
   }, [reload]);
 
   const cancelDevelop = useCallback(async () => {
+    if (develop === "deck") return goHome();
     if (develop === "search") await ipc.searchClear();
     else if (develop === "dupes" && revert.current) {
       await ipc.setSetting("dupes_scope", revert.current.scope);
       await ipc.setSetting("dupes_enabled", revert.current.enabled ? "1" : "0");
-    } else await ipc.cancelDeck();
+    }
     revert.current = null;
     await reload();
     setDevelop(null);
-  }, [develop, reload]);
+  }, [develop, reload, goHome]);
 
-  const ready = !!state?.settings.deck_path && !!state?.settings.table_path;
-  const showStart = state && (!ready || home || state.missing.length > 0 || (!started && !state.settings.mode));
+  const review = view === "review" && !!state?.review && !!state.settings.table_path;
 
   return (
     <div className="flex h-full flex-col">
-      <Titlebar path={ready ? state?.settings.deck_path : undefined} />
+      <Titlebar path={review ? (state?.review ?? undefined) : undefined} />
       {failure && <p className="m-auto max-w-[60ch] text-center text-[15px] text-dim">{failure}</p>}
-      {state && showStart && (
-        <Start
+      {state && screen === "journal" && <JournalScreen cacheDir={state.cacheDir} onBack={back} />}
+      {state && screen === "settings" && <SettingsScreen state={state} onChange={async () => void (await reload())} onBack={back} onWiden={widen} />}
+      {state && screen === "deck" && !review && (
+        <Home
           state={state}
-          onChange={reload}
-          onStart={async () => {
-            await ipc.setSetting("mode", "deck");
-            setStarted(true);
-            setHome(false);
-            await reload();
-          }}
+          incoming={incoming}
+          onOpened={opened}
+          onJournal={toJournal}
+          onSettings={toSettings}
+          onChange={refresh}
         />
       )}
-      {state && !showStart && ready && develop && (
+      {state && review && develop && screen === "deck" && (
         <Develop
           state={state}
           purpose={develop}
@@ -151,34 +148,15 @@ export default function App() {
           onCancel={() => void cancelDevelop()}
         />
       )}
-      {state && !showStart && ready && !developView && screen === "piles" && (
-        <PilesScreen table={state.settings.table_path ?? ""} onBack={back} />
-      )}
-      {state && !showStart && ready && !developView && screen === "journal" && (
-        <JournalScreen cacheDir={state.cacheDir} deckPath={state.settings.deck_path ?? ""} onBack={back} />
-      )}
-      {state && !showStart && ready && !developView && screen === "settings" && (
-        <SettingsScreen state={state} onChange={reload} onBack={back} onWiden={widen} />
-      )}
-      {state && !showStart && ready && !developView && screen === "deck" && (
+      {state && review && !develop && screen === "piles" && <PilesScreen table={state.settings.table_path ?? ""} onBack={back} />}
+      {state && review && !develop && screen === "deck" && (
         <DeckScreen
-          key={`${state.settings.deck_path}|${state.settings.table_path}`}
+          key={`${state.settings.review_id}|${state.settings.table_path}`}
           initial={state}
-          banner={
-            explorer && (
-              <ExplorerBar
-                deck={explorer.path}
-                table={state.settings.table_path ?? ""}
-                error={explorer.error}
-                onPickTable={() => void pickTable()}
-                onClose={() => setExplorer(null)}
-              />
-            )
-          }
           onPiles={() => setScreen("piles")}
           onJournal={() => setScreen("journal")}
           onSettings={() => setScreen("settings")}
-          onHome={() => setHome(true)}
+          onHome={() => void goHome()}
           onWiden={widen}
           onSearch={search}
         />

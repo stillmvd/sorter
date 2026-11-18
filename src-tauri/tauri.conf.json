@@ -20,7 +20,7 @@
         "minHeight": 720,
         "center": true,
         "decorations": false,
-        "dragDropEnabled": false,
+        "dragDropEnabled": true,
         "visible": false,
         "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,OptimizationHints,AutofillServerCommunication,MediaRouter,EdgeFeedback,msEdgeFeedback --disable-background-networking --disable-component-update --disable-domain-reliability --disable-sync --no-pings"
       }

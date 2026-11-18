@@ -59,9 +59,9 @@ export function DupesStep({
   onChanged: (before: DupesSetting, after: DupesSetting) => void;
 }) {
   const set = dupesSetting(state);
-  const deck = !!state.settings.deck_path;
+  const deck = !!state.settings.review_id;
   const piles = state.piles.filter((p) => !p.isTrash).length;
-  const est = useEstimate(set.scope, set.enabled && deck, `${state.settings.deck_path}|${state.settings.table_path}`);
+  const est = useEstimate(set.scope, set.enabled && deck, `${state.settings.review_id}|${state.settings.table_path}`);
   const save = async (next: DupesSetting) => {
     await ipc.setSetting("dupes_scope", next.scope);
     await ipc.setSetting("dupes_enabled", next.enabled ? "1" : "0");

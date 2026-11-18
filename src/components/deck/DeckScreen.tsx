@@ -1,5 +1,5 @@
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Copy, CopyX, Folder, FolderOpen, History, Image as ImageIcon, LayoutGrid, Layers, Loader2, Plus, Search, Settings, Video } from "lucide-react";
+import { Copy, CopyX, Folder, FolderOpen, History, House, Image as ImageIcon, LayoutGrid, Layers, Loader2, Plus, Search, Settings, Video } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { errorText, ipc, mergeCards, onCards, onDeckChanged, onDupesChanged, onPilesChanged, onProgress, onSeries, type AppState, type Card, type DupeGroup, type DupeGroups, type DupeView, type GroupItem, type Kind, type Method, type Move, type Pile, type SeriesView } from "../../lib/ipc";
 import { SeriesPanel, type Rest } from "./SeriesPanel";
@@ -772,9 +772,10 @@ export function DeckScreen({
       return;
     }
     if (e.key === "Escape") {
+      if (!inSearch && (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement)) return;
       if (query) setQuery("");
-      else if (empty) onHome();
-      else if (mode === "table") setSelected(new Set());
+      else if (mode === "table" && selected.size > 0) setSelected(new Set());
+      else if (!ask && !find && !e.defaultPrevented) onHome();
       return;
     }
     if (mode === "table" && (e.key === " " || e.key === "Tab" || e.key.startsWith("Arrow"))) return;
@@ -872,7 +873,7 @@ export function DeckScreen({
         <Done
           placed={counts.placed}
           piles={piles}
-          deckPath={initial.settings.deck_path ?? ""}
+          deckPath={initial.review ?? ""}
           tablePath={initial.settings.table_path ?? ""}
           hintsOn={initial.settings.hints_enabled === "1"}
           onJournal={onJournal}
@@ -955,6 +956,9 @@ export function DeckScreen({
             )}
             {mixed && <KindFilter value={kind} counts={kindCounts} onChange={switchKind} />}
             <Segment label="Режим" options={modes(sure)} value={mode} onChange={switchMode} />
+            <IconButton label="На главный" hint="На главный — Esc" onClick={onHome}>
+              <House size={18} strokeWidth={1.5} />
+            </IconButton>
             <IconButton label="Журнал" hint="Журнал ходов — Ctrl J" onClick={onJournal}>
               <History size={18} strokeWidth={1.5} />
             </IconButton>
@@ -1024,6 +1028,10 @@ export function DeckScreen({
           </div>
           {current && (
             <div className="flex min-w-0 flex-col justify-center-safe gap-3 overflow-y-auto">
+              <span className="hm-origin" title={(focusCard ?? current).path}>
+                <Folder size={15} strokeWidth={1.5} />
+                <span>{(focusCard ?? current).origin}</span>
+              </span>
               <div className="flex min-w-0 items-center gap-2">
                 <span
                   title={`${(focusCard ?? current).kind === "photo" ? "Фото" : "Видео"} · ${(focusCard ?? current).fileName.split(".").pop()?.toUpperCase()}`}
@@ -1189,7 +1197,7 @@ export function DeckScreen({
         <FindDupes
           piles={piles}
           table={initial.settings.table_path ?? ""}
-          deckPath={initial.settings.deck_path ?? ""}
+          deckPath={initial.review ?? ""}
           initial={groups?.search ? { piles: groups.search.piles, deck: groups.search.deck, folders: groups.search.folders } : null}
           onStart={(s) => void startSearch(s)}
           onClose={() => setFind(false)}
