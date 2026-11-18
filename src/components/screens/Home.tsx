@@ -226,14 +226,23 @@ export function Home({
     [apply],
   );
 
+  const queue = useRef<Promise<void>>(Promise.resolve());
+  const pending = useRef(0);
   const addRoots = useCallback(
-    async (paths: string[]) => {
-      if (!paths.length) return;
+    (paths: string[]) => {
+      if (!paths.length) return queue.current;
+      pending.current += 1;
       setBusy(true);
-      await run(() => ipc.addRoots(paths));
-      setFound({});
-      setBusy(false);
-      void load();
+      queue.current = queue.current.then(async () => {
+        await run(() => ipc.addRoots(paths));
+        pending.current -= 1;
+        if (pending.current === 0) {
+          setFound({});
+          setBusy(false);
+          void load();
+        }
+      });
+      return queue.current;
     },
     [run, load],
   );
@@ -337,11 +346,11 @@ export function Home({
   }, []);
 
   useEffect(() => {
-    if (reading) return;
+    if (reading || !(gone || reviews.some((r) => r.gone))) return;
     const onFocus = () => void recheck();
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [reading, recheck]);
+  }, [reading, gone, reviews, recheck]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -569,7 +578,7 @@ export function Home({
                           </span>
                         ) : (
                           <span className="sub hm-err">
-                            {goneText(r.roots[0]?.path ?? "")} · {day(r.openedAt)}
+                            {goneText(r.gone ?? r.roots[0]?.path ?? "")} · {day(r.openedAt)}
                           </span>
                         )}
                         {!r.online && (

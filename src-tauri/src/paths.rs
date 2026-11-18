@@ -37,6 +37,10 @@ pub fn name(p: &str) -> String {
 
 const SKIP_NAMES: [&str; 2] = ["$recycle.bin", "system volume information"];
 
+pub fn system_dir(name: &str) -> bool {
+    SKIP_NAMES.contains(&name.to_lowercase().as_str())
+}
+
 pub fn walk(root: &str, skip: &[String], stop: &AtomicBool, seen: &mut dyn FnMut(usize)) -> io::Result<Vec<(String, i64, i64)>> {
     let base = Path::new(root);
     fs::read_dir(base)?;

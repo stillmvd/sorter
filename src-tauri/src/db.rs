@@ -204,10 +204,12 @@ pub fn init(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
     allow_dir_moves(conn)?;
-    conn.execute(
-        "INSERT OR IGNORE INTO settings(key, value) VALUES ('schema_version', ?1)",
-        params![SCHEMA_VERSION.to_string()],
-    )?;
+    if get_setting(conn, "schema_version")?.is_none() {
+        conn.execute(
+            "INSERT OR IGNORE INTO settings(key, value) VALUES ('schema_version', ?1)",
+            params![SCHEMA_VERSION.to_string()],
+        )?;
+    }
     Ok(())
 }
 

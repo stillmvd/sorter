@@ -324,10 +324,13 @@ fn undone(app: &AppHandle, conn: &Connection, moves: Vec<MoveView>) -> AppResult
     hints::prune(conn)?;
     regroup(app, conn);
     let ids: Vec<i64> = moves.iter().flat_map(|m| m.items.iter().filter_map(|i| i.card_id)).collect();
-    let (_, t) = paths(conn)?;
+    let piles = match paths(conn) {
+        Ok((_, t)) => piles::list(conn, &t)?,
+        Err(_) => Vec::new(),
+    };
     let mv = moves.iter().position(|m| m.items.iter().any(|i| i.card_id.is_some())).or((!moves.is_empty()).then_some(0));
     let mv = mv.and_then(|i| moves.into_iter().nth(i));
-    Ok(Undone { cards: deck::cards(conn, &ids)?, piles: piles::list(conn, &t)?, mv })
+    Ok(Undone { cards: deck::cards(conn, &ids)?, piles, mv })
 }
 
 #[tauri::command]

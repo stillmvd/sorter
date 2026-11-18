@@ -157,10 +157,20 @@ pub fn skip_dirs(conn: &Connection, root: &str) -> Vec<String> {
             |r| r.get(0),
         )
         .ok();
-    match own {
+    let mut out: Vec<String> = match own {
         Some(t) => t.into_iter().collect(),
         None => crate::db::get_setting(conn, "table_path").ok().flatten().into_iter().collect(),
+    };
+    let others: Vec<String> = conn
+        .prepare("SELECT DISTINCT table_path FROM review WHERE table_path IS NOT NULL")
+        .and_then(|mut s| s.query_map([], |r| r.get(0))?.collect())
+        .unwrap_or_default();
+    for t in others {
+        if crate::paths::is_inside(&t, root) && !out.iter().any(|o| crate::paths::same(o, &t)) {
+            out.push(t);
+        }
     }
+    out
 }
 
 pub fn sync_seen(conn: &Connection, deck: &str, stop: &AtomicBool, seen: &mut dyn FnMut(usize)) -> AppResult<SyncResult> {
@@ -197,7 +207,7 @@ pub fn sync_seen(conn: &Connection, deck: &str, stop: &AtomicBool, seen: &mut dy
     for (name, (id, _, _)) in &rows {
         let full = dir.join(name);
         let skipped = skip.iter().any(|s| crate::paths::is_inside(&full.to_string_lossy(), s));
-        if !present.contains_key(name) && !busy_cards.contains(id) && (skipped || !full.exists()) {
+        if !present.contains_key(name) && !busy_cards.contains(id) && (skipped || (!full.exists() && dir.is_dir())) {
             tx.execute("UPDATE card SET status = 'gone' WHERE id = ?1", params![id])?;
             gone.push(*id);
         }

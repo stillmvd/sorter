@@ -193,6 +193,7 @@ export type ReviewView = {
   openedAt: number;
   next: Card | null;
   online: boolean;
+  gone: string | null;
 };
 
 export type Home = { draft: Draft; reviews: ReviewView[]; last: number | null };
