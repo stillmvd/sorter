@@ -61,7 +61,7 @@
 
 - [x] T021 `pnpm run check` и `pnpm build` (при запущенном dev — `CARGO_TARGET_DIR=target-test`)
 - [x] T022 CDP-прогон quickstart 1–8 на dev (`SORTER_DATA`), замер SC-001 на `G:\sorter-test\big`
-- [ ] T023 Вычитка новых строк UI агентом `ru-editor`, `/adversary` на дифф, коммит `feat: …`
+- [x] T023 Вычитка новых строк UI агентом `ru-editor`, `/adversary` на дифф, коммит `feat: …`
 
 ## Dependencies
 
