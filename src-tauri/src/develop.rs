@@ -709,8 +709,8 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<Atomi
                         continue;
                     }
                     Ok(None) => {
-                        if let dupes::Scope::Search(mut spec) = scope {
-                            if spec.state == "running" {
+                        if let dupes::Scope::Search(mut spec) = scope
+                            && spec.state == "running" {
                                 if let Err(e) = dupes::refresh_exact(&conn) {
                                     eprintln!("dupes: {e}");
                                 }
@@ -721,7 +721,6 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<Atomi
                                 report.tick(&app, &conn, false, &mut printed, true);
                                 continue;
                             }
-                        }
                     }
                     Err(e) => eprintln!("dupes: {e}"),
                 }

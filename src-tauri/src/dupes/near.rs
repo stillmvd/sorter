@@ -16,15 +16,15 @@ pub const AUDIO_HITS: usize = 3;
 const BATCH: usize = 16;
 
 fn u64s(b: &[u8]) -> Vec<u64> {
-    b.chunks_exact(8).map(|c| u64::from_le_bytes(c.try_into().unwrap())).collect()
+    b.as_chunks::<8>().0.iter().map(|c| u64::from_le_bytes(*c)).collect()
 }
 
 fn u32s(b: &[u8]) -> Vec<u32> {
-    b.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect()
+    b.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c)).collect()
 }
 
 fn vectors(b: &[u8]) -> Vec<Vec<f32>> {
-    hints::from_blob(b).chunks_exact(768).map(|c| c.to_vec()).collect()
+    hints::from_blob(b).as_chunks::<768>().0.iter().map(|c| c.to_vec()).collect()
 }
 
 pub struct Entry {
@@ -379,11 +379,10 @@ impl Printer {
                 if !Path::new(&other.path).is_file() {
                     continue;
                 }
-                if let Some(pair) = compare(conn, &me, other, &audio_set)? {
-                    if pair.confidence >= STORE_MIN {
+                if let Some(pair) = compare(conn, &me, other, &audio_set)?
+                    && pair.confidence >= STORE_MIN {
                         found.push((me.path.clone(), other.path.clone(), pair));
                     }
-                }
             }
             index.insert(me);
         }
@@ -526,11 +525,10 @@ mod photos {
         let mut shown = Vec::new();
         for (i, a) in all.iter().enumerate() {
             for b in &all[i + 1..] {
-                if let Some(p) = compare_photos(a, b) {
-                    if p.confidence >= 80 {
+                if let Some(p) = compare_photos(a, b)
+                    && p.confidence >= 80 {
                         shown.push(format!("{} | {} {} {} {:.3}", a.path, b.path, p.kind, p.confidence, p.semantic));
                     }
-                }
             }
         }
         shown.iter().for_each(|s| println!("ПАРА {s}"));

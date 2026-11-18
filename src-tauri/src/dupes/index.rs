@@ -283,11 +283,10 @@ mod tests {
             let set: HashSet<u32> = me.audio.iter().copied().collect();
             let others: Vec<&Entry> = if indexed { index.candidates(me) } else { all[..j].iter().collect() };
             for other in others {
-                if let Some(p) = compare(conn, me, other, &set).unwrap() {
-                    if p.confidence >= crate::dupes::near::STORE_MIN {
+                if let Some(p) = compare(conn, me, other, &set).unwrap()
+                    && p.confidence >= crate::dupes::near::STORE_MIN {
                         out.insert((other.path.clone(), me.path.clone()));
                     }
-                }
             }
             if indexed {
                 index.insert(Entry { path: me.path.clone(), duration_ms: me.duration_ms, frames: me.frames.clone(), audio: me.audio.clone(), mean: me.mean.clone(), look: me.look.clone() });

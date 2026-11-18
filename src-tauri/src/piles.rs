@@ -77,11 +77,10 @@ static COUNTS: LazyLock<Mutex<HashMap<PathBuf, (SystemTime, i64)>>> = LazyLock::
 
 fn count_media(dir: &Path) -> i64 {
     let Ok(stamp) = fs::metadata(dir).and_then(|m| m.modified()) else { return 0 };
-    if let Some(&(at, n)) = COUNTS.lock().unwrap().get(dir) {
-        if at == stamp {
+    if let Some(&(at, n)) = COUNTS.lock().unwrap().get(dir)
+        && at == stamp {
             return n;
         }
-    }
     let n = fs::read_dir(dir)
         .map(|it| it.filter_map(|e| e.ok()).filter(|e| is_media(&e.path())).count() as i64)
         .unwrap_or(0);

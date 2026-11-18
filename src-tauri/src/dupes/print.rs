@@ -475,22 +475,22 @@ pub mod mf {
             let mut fill = |data: *const u8, pitch: isize| {
                 for y in 0..h as usize {
                     let line = std::slice::from_raw_parts(data.offset(y as isize * pitch), row);
-                    for (x, p) in line.chunks_exact(4).enumerate() {
+                    for (x, p) in line.as_chunks::<4>().0.iter().enumerate() {
                         img.put_pixel(x as u32, y as u32, image::Rgb([p[2], p[1], p[0]]));
                     }
                 }
             };
-            if let Ok(b2) = buffer.cast::<IMF2DBuffer>() {
+            match buffer.cast::<IMF2DBuffer>() { Ok(b2) => {
                 let (mut ptr, mut pitch) = (std::ptr::null_mut(), 0i32);
                 b2.Lock2D(&mut ptr, &mut pitch)?;
                 fill(ptr, pitch as isize);
                 b2.Unlock2D()?;
-            } else {
+            } _ => {
                 let mut ptr = std::ptr::null_mut();
                 buffer.Lock(&mut ptr, None, None)?;
                 fill(ptr, row as isize);
                 buffer.Unlock()?;
-            }
+            }}
             Ok(img)
         }
     }

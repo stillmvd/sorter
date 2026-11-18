@@ -52,8 +52,8 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, wake: Arc<AtomicBool>) {
                 continue;
             }
             retry = false;
-            if let Some(d) = &deck_path {
-                if let Ok(r) = deck::sync(&conn, d) {
+            if let Some(d) = &deck_path
+                && let Ok(r) = deck::sync(&conn, d) {
                     retry = r.pending;
                     if !r.added.is_empty() || !r.gone.is_empty() {
                         let added = deck::cards(&conn, &r.added).unwrap_or_default();
@@ -64,14 +64,11 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, wake: Arc<AtomicBool>) {
                         }
                     }
                 }
-            }
-            if let Some(t) = &table_path {
-                if piles::sync(&conn, t).is_ok() {
-                    if let Ok(list) = piles::list(&conn, t) {
+            if let Some(t) = &table_path
+                && piles::sync(&conn, t).is_ok()
+                    && let Ok(list) = piles::list(&conn, t) {
                         let _ = app.emit("piles://changed", list);
                     }
-                }
-            }
         }
     });
 }

@@ -563,14 +563,13 @@ pub fn undo_with(conn: &Connection, move_id: i64, rename: RenameFn) -> AppResult
     let items = load_items(conn, move_id)?;
     if state == "done" {
         for it in &items {
-            if let Some(to) = &it.to {
-                if !to.exists() {
+            if let Some(to) = &it.to
+                && !to.exists() {
                     return Err(AppError::new(
                         "FILE_NOT_THERE",
                         format!("Файла «{}» нет в стопке — его переместили или удалили, забрать ход нельзя.", file_label(to)),
                     ));
                 }
-            }
             if it.from.exists() {
                 return Err(AppError::new(
                     "FILE_IN_THE_WAY",

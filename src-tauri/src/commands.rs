@@ -133,11 +133,10 @@ fn snapshot(conn: &Connection, state: &AppState) -> AppResult<StateView> {
 #[tauri::command(async)]
 pub fn get_state(state: State<AppState>) -> AppResult<StateView> {
     let conn = state.read()?;
-    if let Ok((_, t)) = paths(&conn) {
-        if Path::new(&t).is_dir() {
+    if let Ok((_, t)) = paths(&conn)
+        && Path::new(&t).is_dir() {
             piles::sync(&conn, &t)?;
         }
-    }
     state.wake.store(true, Ordering::Relaxed);
     snapshot(&conn, &state)
 }
@@ -153,14 +152,13 @@ fn choose(conn: &Connection, key: &str, other: &str, path: &str) -> AppResult<()
     if !p.is_dir() {
         return Err(AppError::new("NO_FOLDER", "Такой папки нет — выбери другую."));
     }
-    if let Some(o) = get_setting(conn, other)? {
-        if nested(p, Path::new(&o)) {
+    if let Some(o) = get_setting(conn, other)?
+        && nested(p, Path::new(&o)) {
             return Err(AppError::new(
                 "NESTED",
                 "Колода и стол не могут совпадать или лежать друг в друге — иначе Sorter начнёт раскладывать уже разложенное.",
             ));
         }
-    }
     Ok(set_setting(conn, key, path)?)
 }
 
@@ -254,11 +252,10 @@ pub fn deck_window(state: State<AppState>, from: i64, count: i64, kind: Option<S
 }
 
 fn regroup(app: &AppHandle, conn: &Connection) {
-    if let Ok((d, _)) = paths(conn) {
-        if series::regroup(conn, &d).unwrap_or(false) {
+    if let Ok((d, _)) = paths(conn)
+        && series::regroup(conn, &d).unwrap_or(false) {
             let _ = app.emit("deck://series", ());
         }
-    }
 }
 
 #[derive(Serialize)]
