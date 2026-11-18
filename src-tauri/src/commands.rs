@@ -174,18 +174,17 @@ pub struct Chosen {
 
 #[tauri::command(async)]
 pub fn choose_deck(app: AppHandle, state: State<AppState>, path: String) -> AppResult<Chosen> {
-    let conn = state.conn();
-    let before = get_setting(&conn, "deck_path")?;
-    choose(&conn, "deck_path", "table_path", &path)?;
-    if before.as_deref() != Some(path.as_str()) {
-        set_setting(&conn, "hints_enabled", "0")?;
-        if let Some(old) = before.filter(|b| !b.is_empty()) {
-            crate::develop::forget_deck(&conn, &state.data_dir.join("cache"), &old, true)?;
-        }
+    {
+        let conn = state.conn();
+        choose(&conn, "deck_path", "table_path", &path)?;
     }
+    state.paused.store(false, Ordering::Relaxed);
+    let conn = crate::db::open(&state.db_path)?;
     deck::sync_seen(&conn, &path, &mut |found| {
         let _ = app.emit("deck://reading", found);
     })?;
+    crate::develop::drop_lost_frames(&conn, &state.data_dir.join("cache"), &path)?;
+    state.wake.store(true, Ordering::Relaxed);
     Ok(conn.query_row(
         "SELECT COUNT(*), COALESCE(SUM(size), 0) FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred')",
         params![path],
@@ -195,20 +194,20 @@ pub fn choose_deck(app: AppHandle, state: State<AppState>, path: String) -> AppR
 
 #[tauri::command]
 pub fn cancel_deck(state: State<AppState>) -> AppResult<()> {
-    let conn = state.conn();
-    if let Some(deck) = get_setting(&conn, "deck_path")? {
-        crate::develop::forget_deck(&conn, &state.data_dir.join("cache"), &deck, false)?;
-    }
-    conn.execute("DELETE FROM settings WHERE key = 'deck_path'", [])?;
+    state.conn().execute("DELETE FROM settings WHERE key = 'deck_path'", [])?;
     state.wake.store(true, Ordering::Relaxed);
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn choose_table(state: State<AppState>, path: String) -> AppResult<Vec<PileView>> {
-    let conn = state.conn();
-    choose(&conn, "table_path", "deck_path", &path)?;
+    {
+        let conn = state.conn();
+        choose(&conn, "table_path", "deck_path", &path)?;
+    }
+    let conn = crate::db::open(&state.db_path)?;
     piles::sync(&conn, &path)?;
+    state.wake.store(true, Ordering::Relaxed);
     piles::list(&conn, &path)
 }
 
@@ -386,7 +385,9 @@ pub fn cache_info(state: State<AppState>) -> CacheInfo {
 
 #[tauri::command]
 pub fn clear_cache(state: State<AppState>) -> AppResult<u64> {
-    let freed = crate::develop::clear_cache(&state.conn(), &state.data_dir.join("cache"))?;
+    let conn = state.conn();
+    let open = [get_setting(&conn, "deck_path")?.unwrap_or_default(), get_setting(&conn, "table_path")?.unwrap_or_default()];
+    let freed = crate::develop::clear_cache(&conn, &state.data_dir.join("cache"), &[open[0].as_str(), open[1].as_str()])?;
     state.wake.store(true, Ordering::Relaxed);
     Ok(freed)
 }

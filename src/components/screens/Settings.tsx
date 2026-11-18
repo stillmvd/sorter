@@ -1,6 +1,6 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { Folder } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { errorText, ipc, type AppState } from "../../lib/ipc";
 import { plural } from "../../lib/plural";
 import { Button } from "../ui/Button";
@@ -50,6 +50,10 @@ export function SettingsScreen({
   const [cache, setCache] = useState<{ bytes: number; cards: number } | null>(null);
   const [freed, setFreed] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState(false);
+  const confirmTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  useEffect(() => () => clearTimeout(confirmTimer.current), []);
 
   useEffect(() => {
     void ipc.cacheInfo().then(setCache);
@@ -87,6 +91,13 @@ export function SettingsScreen({
   };
 
   const clear = async () => {
+    clearTimeout(confirmTimer.current);
+    if (!confirm) {
+      setConfirm(true);
+      confirmTimer.current = setTimeout(() => setConfirm(false), 3000);
+      return;
+    }
+    setConfirm(false);
     setBusy(true);
     try {
       setFreed(await ipc.clearCache());
@@ -189,7 +200,7 @@ export function SettingsScreen({
           </div>
         </Tile>
 
-        <Tile title="Кэш проявки" note="Раскадровки и починенные копии видео. Очистка безопасна — всё проявится заново, когда карта понадобится.">
+        <Tile title="Кэш проявки" note="Раскадровки и починенные копии видео. Карты открытой колоды останутся, остальное проявится заново, когда понадобится.">
           <div className="flex items-center gap-4">
             <div className="flex min-w-0 flex-1 items-baseline gap-2.5 whitespace-nowrap">
               <span className="text-[28px] leading-none font-bold tracking-[-0.02em]">{cache ? mb(cache.bytes) : "…"}</span>
@@ -198,7 +209,7 @@ export function SettingsScreen({
               </span>
             </div>
             <Button size={44} className="bg-strong! hover:bg-line!" disabled={busy || !cache?.bytes} onClick={() => void clear()}>
-              {freed !== null && !cache?.bytes ? "Очищено" : "Очистить кэш"}
+              {confirm ? "Точно очистить?" : freed !== null && !cache?.bytes ? "Очищено" : "Очистить кэш"}
             </Button>
           </div>
         </Tile>

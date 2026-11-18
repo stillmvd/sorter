@@ -162,6 +162,10 @@ pub fn sync_seen(conn: &Connection, deck: &str, seen: &mut dyn FnMut(usize)) -> 
         .prepare("SELECT id, file_name, size, mtime FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred')")?
         .query_map(params![deck], |r| Ok((r.get::<_, String>(1)?.to_lowercase(), (r.get(0)?, r.get(2)?, r.get(3)?))))?
         .collect::<Result<_, _>>()?;
+    let lost: HashMap<String, (i64, i64, i64)> = tx
+        .prepare("SELECT id, file_name, size, mtime FROM card WHERE deck_path = ?1 AND status = 'gone' ORDER BY id")?
+        .query_map(params![deck], |r| Ok((r.get::<_, String>(1)?.to_lowercase(), (r.get(0)?, r.get(2)?, r.get(3)?))))?
+        .collect::<Result<_, _>>()?;
 
     let mut busy = std::collections::HashSet::new();
     let mut busy_cards = std::collections::HashSet::new();
@@ -208,8 +212,19 @@ pub fn sync_seen(conn: &Connection, deck: &str, seen: &mut dyn FnMut(usize)) -> 
             None if !dir.join(&name).exists() => {}
             None if !ready(&dir.join(&name)) || busy.contains(&dir.join(&name).to_string_lossy().to_lowercase()) => pending = true,
             None => {
-                let named = taken_from_name(&name);
                 position += 1.0;
+                if let Some((id, s, m)) = lost.get(&name.to_lowercase()) {
+                    let same = (*s, *m) == (size, mtime);
+                    tx.execute(
+                        "UPDATE card SET status = 'in_deck', position = ?2, size = ?3, mtime = ?4,
+                           stage = CASE WHEN ?5 AND stage <> 'meta' THEN stage ELSE 'new' END, frames = CASE WHEN ?5 THEN frames ELSE 0 END
+                         WHERE id = ?1",
+                        params![id, position, size, mtime, same],
+                    )?;
+                    added.push(*id);
+                    continue;
+                }
+                let named = taken_from_name(&name);
                 insert.execute(params![
                     deck,
                     name,
@@ -366,6 +381,35 @@ mod tests {
         let mut seen = Vec::new();
         sync_seen(&conn, &tmp.path().to_string_lossy(), &mut |n| seen.push(n)).unwrap();
         assert_eq!(seen, vec![0, 50, 100, 120]);
+    }
+
+    #[test]
+    fn sync_revives_returned_file_with_its_frames() {
+        let tmp = TempDir::new().unwrap();
+        let deck = tmp.path().to_string_lossy().into_owned();
+        fs::write(tmp.path().join("a.mp4"), b"a").unwrap();
+        fs::write(tmp.path().join("b.mp4"), b"b").unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        db::init(&conn).unwrap();
+        sync(&conn, &deck).unwrap();
+        conn.execute("UPDATE card SET stage = 'embedded', frames = 8", []).unwrap();
+        fs::rename(tmp.path().join("a.mp4"), tmp.path().join("a.bak")).unwrap();
+        fs::rename(tmp.path().join("b.mp4"), tmp.path().join("b.bak")).unwrap();
+        assert_eq!(sync(&conn, &deck).unwrap().gone.len(), 2);
+        fs::rename(tmp.path().join("a.bak"), tmp.path().join("a.mp4")).unwrap();
+        fs::remove_file(tmp.path().join("b.bak")).unwrap();
+        fs::write(tmp.path().join("b.mp4"), b"bigger").unwrap();
+        let r = sync(&conn, &deck).unwrap();
+        assert_eq!(r.added.len(), 2);
+        let row = |name: &str| {
+            conn.query_row("SELECT status, stage FROM card WHERE file_name = ?1", params![name], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })
+            .unwrap()
+        };
+        assert_eq!(row("a.mp4"), ("in_deck".to_string(), "embedded".to_string()));
+        assert_eq!(row("b.mp4"), ("in_deck".to_string(), "new".to_string()));
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM card", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
     }
 
     #[test]

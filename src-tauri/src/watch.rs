@@ -44,6 +44,7 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, wake: Arc<AtomicBool>) {
                     d
                 });
                 watched = (deck_path.clone(), table_path.clone());
+                retry = true;
             }
             let timeout = if retry { Duration::from_secs(3) } else { Duration::from_secs(2) };
             let fired = rx.recv_timeout(timeout).is_ok();

@@ -21,3 +21,4 @@ brand/concepts/logo-page.html
 brand/concepts/wave6/
 brand/**/__pycache__/
 src-tauri/target-test/
+/target-test/

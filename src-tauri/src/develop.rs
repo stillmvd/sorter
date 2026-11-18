@@ -200,14 +200,15 @@ pub fn orientation(w: u32, h: u32) -> &'static str {
     }
 }
 
-fn next(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<(i64, PathBuf)>> {
+fn next(conn: &Connection, limit: usize, held: &HashSet<i64>) -> rusqlite::Result<Vec<(i64, PathBuf)>> {
     let deck = db::get_setting(conn, "deck_path")?.unwrap_or_default();
     let mut stmt = conn.prepare(
         "SELECT id, deck_path, file_name, status, current_path FROM card
          WHERE stage = 'new' AND status != 'gone' AND (current_path IS NOT NULL OR status != 'placed')
+           AND (deck_path = ?1 OR status = 'placed')
          ORDER BY (deck_path = ?1 AND status = 'in_deck') DESC, status = 'deferred', position LIMIT ?2",
     )?;
-    let rows = stmt.query_map(params![deck, limit as i64], |r| {
+    let rows = stmt.query_map(params![deck, (limit + held.len()) as i64], |r| {
         let (id, d, name, status, current): (i64, String, String, String, Option<String>) =
             (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?);
         let path = match (status.as_str(), current) {
@@ -216,7 +217,7 @@ fn next(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<(i64, PathBuf)>
         };
         Ok((id, path))
     })?;
-    rows.collect()
+    Ok(rows.filter_map(|r| r.ok()).filter(|(id, _)| !held.contains(id)).take(limit).collect())
 }
 
 pub fn status(conn: &Connection, paused: bool, printed: (i64, i64)) -> rusqlite::Result<Status> {
@@ -533,71 +534,66 @@ pub fn cache_size(cache: &Path) -> (u64, usize) {
     (walk(cache), cards)
 }
 
-pub fn clear_cache(conn: &Connection, cache: &Path) -> rusqlite::Result<u64> {
+pub fn clear_cache(conn: &Connection, cache: &Path, open: &[&str]) -> rusqlite::Result<u64> {
     let (before, _) = cache_size(cache);
+    let deck = open.first().copied().unwrap_or_default();
+    let keep: HashSet<String> = conn
+        .prepare("SELECT id FROM card WHERE deck_path = ?1")?
+        .query_map(params![deck], |r| r.get::<_, i64>(0))?
+        .filter_map(|r| r.ok())
+        .map(|id| id.to_string())
+        .collect();
     if let Ok(entries) = fs::read_dir(cache) {
         for dir in entries.filter_map(|e| e.ok()) {
-            let _ = fs::remove_dir_all(dir.path());
+            if !keep.contains(dir.file_name().to_string_lossy().as_ref()) {
+                let _ = fs::remove_dir_all(dir.path());
+            }
         }
     }
-    conn.execute(
-        "UPDATE card SET stage = CASE WHEN status IN ('in_deck','deferred') THEN 'new' ELSE 'meta' END, frames = 0
-         WHERE stage IN ('frames','embedded')",
+    let prefix = |p: &str| {
+        if p.is_empty() { "\u{1}".to_string() } else { format!("{}{}", p.trim_end_matches(['\\', '/']), std::path::MAIN_SEPARATOR) }
+    };
+    let (a, b) = (prefix(deck), prefix(open.get(1).copied().unwrap_or_default()));
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "DELETE FROM fingerprint WHERE substr(path, 1, length(?1)) != ?1 AND substr(path, 1, length(?2)) != ?2",
+        params![a, b],
+    )?;
+    tx.execute(
+        "DELETE FROM dupe WHERE a NOT IN (SELECT path FROM fingerprint) OR b NOT IN (SELECT path FROM fingerprint)",
         [],
     )?;
+    tx.execute("DELETE FROM embedding WHERE card_id IN (SELECT id FROM card WHERE deck_path != ?1)", params![deck])?;
+    tx.execute(
+        "UPDATE card SET stage = CASE WHEN status IN ('in_deck','deferred') THEN 'new' ELSE 'meta' END, frames = 0
+         WHERE stage IN ('frames','embedded') AND deck_path != ?1",
+        params![deck],
+    )?;
+    tx.commit()?;
     let (after, _) = cache_size(cache);
     Ok(before.saturating_sub(after))
 }
 
-pub fn forget_deck(conn: &Connection, cache: &Path, deck: &str, only_untouched: bool) -> rusqlite::Result<usize> {
-    let placed: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM card WHERE deck_path = ?1 AND status = 'placed')", params![deck], |r| r.get(0))?;
-    if only_untouched && placed {
-        return Ok(0);
-    }
-    let cards: Vec<(i64, String, bool)> = conn
-        .prepare(
-            "SELECT id, file_name, EXISTS(SELECT 1 FROM move_item i WHERE i.card_id = card.id) FROM card
-             WHERE deck_path = ?1 AND status != 'placed'",
-        )?
-        .query_map(params![deck], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-        .collect::<Result<_, _>>()?;
+pub fn drop_lost_frames(conn: &Connection, cache: &Path, deck: &str) -> rusqlite::Result<usize> {
+    let dirs: HashSet<String> = fs::read_dir(cache)
+        .map(|it| it.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    let lost: Vec<i64> = conn
+        .prepare("SELECT id FROM card WHERE deck_path = ?1 AND stage IN ('frames','embedded')")?
+        .query_map(params![deck], |r| r.get::<_, i64>(0))?
+        .filter_map(|r| r.ok())
+        .filter(|id| !dirs.contains(&id.to_string()))
+        .collect();
     let tx = conn.unchecked_transaction()?;
-    for (id, name, moved) in &cards {
-        let path = Path::new(deck).join(name).to_string_lossy().into_owned();
+    for id in &lost {
         tx.execute("DELETE FROM embedding WHERE card_id = ?1", params![id])?;
-        if *moved {
-            tx.execute("UPDATE card SET stage = 'new', frames = 0 WHERE id = ?1", params![id])?;
-        } else {
-            tx.execute("DELETE FROM card WHERE id = ?1", params![id])?;
-        }
-        tx.execute("DELETE FROM fingerprint WHERE path = ?1", params![path])?;
-        tx.execute("DELETE FROM dupe WHERE a = ?1 OR b = ?1", params![path])?;
-        tx.execute("DELETE FROM dupe_dismissed WHERE a = ?1 OR b = ?1", params![path])?;
+        tx.execute("UPDATE card SET stage = 'new', frames = 0 WHERE id = ?1", params![id])?;
     }
     tx.commit()?;
-    let dirs: Vec<PathBuf> = cards.iter().map(|(id, ..)| cache.join(id.to_string())).collect();
-    let n = dirs.len();
-    let gone = std::thread::spawn(move || dirs.iter().for_each(|d| drop(fs::remove_dir_all(d))));
-    if cfg!(test) {
-        let _ = gone.join();
-    }
-    Ok(n)
+    Ok(lost.len())
 }
 
-const KEEP_PLACED_MS: i64 = 7 * 24 * 60 * 60 * 1000;
-
-pub fn tidy(conn: &Connection, cache: &Path, now: i64) -> rusqlite::Result<(usize, usize)> {
-    let stale: Vec<i64> = conn
-        .prepare(
-            "SELECT c.id FROM card c WHERE c.stage IN ('frames','embedded') AND (c.status = 'gone' OR (c.status = 'placed' AND
-               COALESCE((SELECT MAX(m.at) FROM move m JOIN move_item i ON i.move_id = m.id WHERE i.card_id = c.id AND m.state = 'done'), 0) < ?1))",
-        )?
-        .query_map(params![now - KEEP_PLACED_MS], |r| r.get(0))?
-        .collect::<Result<_, _>>()?;
-    for id in &stale {
-        conn.execute("DELETE FROM embedding WHERE card_id = ?1", params![id])?;
-        conn.execute("UPDATE card SET stage = 'meta', frames = 0 WHERE id = ?1", params![id])?;
-    }
+pub fn tidy(conn: &Connection, cache: &Path) -> rusqlite::Result<(usize, usize)> {
     let keep: std::collections::HashSet<String> = conn
         .prepare("SELECT id FROM card WHERE stage IN ('frames','embedded')")?
         .query_map([], |r| r.get::<_, i64>(0))?
@@ -630,7 +626,7 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<Atomi
         #[cfg(windows)]
         mf::start();
         let Ok(conn) = db::open(&db_path) else { return };
-        if let Err(e) = tidy(&conn, &cache, db::now_ms()) {
+        if let Err(e) = tidy(&conn, &cache) {
             eprintln!("tidy: {e}");
         }
         lower_priority();
@@ -645,21 +641,30 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<Atomi
         let mut series_dirty = false;
         let mut series_at = Instant::now();
         let mut scope_name = "";
+        let mut held: HashSet<i64> = HashSet::new();
         loop {
             let is_paused = paused.load(Ordering::Relaxed);
+            let woke = wake.swap(false, Ordering::Relaxed);
+            if woke {
+                held.clear();
+            }
             let scope = dupes::Scope::work(&conn).unwrap_or(dupes::Scope::Off);
             if scope.name() != scope_name {
                 scope_name = scope.name();
                 printed.reset();
                 dupes_at = Instant::now() - Duration::from_secs(60);
             }
-            let jobs = if is_paused { Vec::new() } else { next(&conn, workers()).unwrap_or_default() };
+            let jobs = if is_paused { Vec::new() } else { next(&conn, workers(), &held).unwrap_or_default() };
             let idle = jobs.is_empty();
             if !idle {
                 was_busy = true;
                 let results = develop_batch(&cache, &jobs);
                 if let Ok(tx) = conn.unchecked_transaction() {
                     for ((id, path), result) in jobs.iter().zip(results) {
+                        if result.is_none() && !path.exists() {
+                            held.insert(*id);
+                            continue;
+                        }
                         if save(&tx, *id, path, result).is_ok() {
                             developed.push(*id);
                         }
@@ -726,10 +731,13 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<Atomi
                 }
             }
             if !is_paused && learner.step(&app, &conn, &cache) {
+                if woke {
+                    wake.store(true, Ordering::Relaxed);
+                }
                 report.tick(&app, &conn, false, &mut printed, false);
                 continue;
             }
-            if was_busy || report.dirty || wake.swap(false, Ordering::Relaxed) {
+            if was_busy || report.dirty || woke {
                 printed.reset();
                 report.tick(&app, &conn, is_paused, &mut printed, true);
                 was_busy = false;
@@ -772,6 +780,80 @@ mod tests {
     }
 
     #[test]
+    fn next_takes_only_open_deck_and_skips_held() {
+        let conn = Connection::open_in_memory().unwrap();
+        db::init(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO card(id, deck_path, file_name, size, mtime, position, stage, frames, status) VALUES
+               (1, 'D', 'a.mp4', 1, 0, 1, 'new', 0, 'in_deck'),
+               (2, 'D', 'b.mp4', 1, 0, 2, 'new', 0, 'in_deck'),
+               (3, 'E', 'c.mp4', 1, 0, 1, 'new', 0, 'in_deck');",
+        )
+        .unwrap();
+        let ids = |held: &HashSet<i64>| next(&conn, 4, held).unwrap().into_iter().map(|(id, _)| id).collect::<Vec<_>>();
+        assert!(ids(&HashSet::new()).is_empty());
+        db::set_setting(&conn, "deck_path", "D").unwrap();
+        assert_eq!(ids(&HashSet::new()), vec![1, 2]);
+        assert_eq!(ids(&HashSet::from([1])), vec![2]);
+    }
+
+    #[test]
+    fn lost_frames_redevelop() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("cache");
+        let conn = Connection::open_in_memory().unwrap();
+        db::init(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO card(id, deck_path, file_name, size, mtime, position, stage, frames, status) VALUES
+               (1, 'D', 'a.mp4', 1, 0, 1, 'frames', 8, 'in_deck'),
+               (2, 'D', 'b.mp4', 1, 0, 2, 'embedded', 8, 'in_deck'),
+               (3, 'E', 'c.mp4', 1, 0, 1, 'embedded', 8, 'in_deck');
+             INSERT INTO embedding(card_id, vector) VALUES (2, x'00'), (3, x'00');",
+        )
+        .unwrap();
+        fs::create_dir_all(cache.join("1")).unwrap();
+        assert_eq!(drop_lost_frames(&conn, &cache, "D").unwrap(), 1);
+        let stage = |id: i64| conn.query_row("SELECT stage FROM card WHERE id = ?1", params![id], |r| r.get::<_, String>(0)).unwrap();
+        assert_eq!((stage(1).as_str(), stage(2).as_str(), stage(3).as_str()), ("frames", "new", "embedded"));
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM embedding", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+    }
+
+    #[test]
+    fn clear_cache_keeps_open_deck_and_decisions() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("cache");
+        let conn = Connection::open_in_memory().unwrap();
+        db::init(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO card(id, deck_path, file_name, size, mtime, position, stage, frames, status) VALUES
+               (1, 'D', 'a.mp4', 1, 0, 1, 'embedded', 8, 'in_deck'),
+               (2, 'E', 'b.mp4', 1, 0, 1, 'embedded', 8, 'in_deck');
+             INSERT INTO embedding(card_id, vector) VALUES (1, x'00'), (2, x'00');",
+        )
+        .unwrap();
+        let a = Path::new("D").join("a.mp4").to_string_lossy().into_owned();
+        let b = Path::new("E").join("b.mp4").to_string_lossy().into_owned();
+        for p in [&a, &b] {
+            conn.execute("INSERT INTO fingerprint(path, size, mtime, state) VALUES (?1, 1, 0, 'ok')", params![p]).unwrap();
+        }
+        conn.execute("INSERT INTO dupe(a, b, kind, confidence) VALUES (?1, ?2, 'same', 90)", params![a, b]).unwrap();
+        conn.execute("INSERT INTO dupe_dismissed(a, b) VALUES (?1, ?2)", params![a, b]).unwrap();
+        for id in ["1", "2"] {
+            fs::create_dir_all(cache.join(id)).unwrap();
+            fs::write(cache.join(id).join("0.jpg"), [0u8; 100]).unwrap();
+        }
+        assert_eq!(clear_cache(&conn, &cache, &["D", ""]).unwrap(), 100);
+        assert!(cache.join("1").exists() && !cache.join("2").exists());
+        let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(
+            (count("SELECT COUNT(*) FROM fingerprint"), count("SELECT COUNT(*) FROM dupe"), count("SELECT COUNT(*) FROM dupe_dismissed")),
+            (1, 0, 1)
+        );
+        assert_eq!(count("SELECT COUNT(*) FROM embedding"), 1);
+        assert_eq!(count("SELECT COUNT(*) FROM card WHERE stage = 'new'"), 1);
+    }
+
+    #[test]
     fn clear_cache_empties_dir_and_redevelops_deck() {
         let dir = tempfile::tempdir().unwrap();
         let cache = dir.path().join("cache");
@@ -789,7 +871,7 @@ mod tests {
             fs::write(cache.join(id).join("0.jpg"), [0u8; 100]).unwrap();
         }
         assert_eq!(cache_size(&cache), (200, 2));
-        assert_eq!(clear_cache(&conn, &cache).unwrap(), 200);
+        assert_eq!(clear_cache(&conn, &cache, &[]).unwrap(), 200);
         assert_eq!(cache_size(&cache), (0, 0));
         let stage = |id: i64| conn.query_row("SELECT stage FROM card WHERE id = ?1", params![id], |r| r.get::<_, String>(0)).unwrap();
         assert_eq!((stage(1).as_str(), stage(2).as_str(), stage(3).as_str()), ("new", "meta", "broken"));
@@ -820,43 +902,7 @@ mod tests {
     }
 
     #[test]
-    fn forget_deck_drops_untouched_deck_and_keeps_placed() {
-        let dir = tempfile::tempdir().unwrap();
-        let cache = dir.path().join("cache");
-        let conn = Connection::open_in_memory().unwrap();
-        db::init(&conn).unwrap();
-        conn.execute_batch(
-            "INSERT INTO pile(id, table_path, name, ord) VALUES (1, 'T', 'A', 0);
-             INSERT INTO card(id, deck_path, file_name, size, mtime, position, stage, frames, status) VALUES
-               (1, 'D', 'a.mp4', 1, 0, 1, 'frames', 8, 'in_deck'),
-               (2, 'D', 'b.mp4', 1, 0, 2, 'frames', 8, 'in_deck'),
-               (3, 'E', 'c.mp4', 1, 0, 1, 'frames', 8, 'in_deck'),
-               (4, 'E', 'd.mp4', 1, 0, 2, 'frames', 8, 'placed');
-             INSERT INTO move(id, at, method, pile_id, state) VALUES (1, 1, 'key', 1, 'undone');
-             INSERT INTO move_item(move_id, card_id, from_path, step) VALUES (1, 2, 'x', 'done');
-             INSERT INTO embedding(card_id, vector) VALUES (1, x'00'), (2, x'00');",
-        )
-        .unwrap();
-        let a = Path::new("D").join("a.mp4").to_string_lossy().into_owned();
-        conn.execute("INSERT INTO fingerprint(path, size, mtime, state) VALUES (?1, 1, 0, 'ok')", params![a]).unwrap();
-        conn.execute("INSERT INTO dupe(a, b, kind, confidence) VALUES (?1, 'Z', 'same', 90)", params![a]).unwrap();
-        for id in ["1", "2", "3"] {
-            fs::create_dir_all(cache.join(id)).unwrap();
-        }
-        assert_eq!(forget_deck(&conn, &cache, "E", true).unwrap(), 0);
-        assert_eq!(forget_deck(&conn, &cache, "D", true).unwrap(), 2);
-        let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
-        assert_eq!(count("SELECT COUNT(*) FROM card WHERE deck_path = 'D'"), 1);
-        assert_eq!(count("SELECT COUNT(*) FROM card WHERE id = 2 AND stage = 'new' AND frames = 0"), 1);
-        assert_eq!(count("SELECT COUNT(*) FROM embedding"), 0);
-        assert_eq!(count("SELECT COUNT(*) FROM fingerprint") + count("SELECT COUNT(*) FROM dupe"), 0);
-        assert!(!cache.join("1").exists() && !cache.join("2").exists() && cache.join("3").exists());
-        assert_eq!(forget_deck(&conn, &cache, "E", false).unwrap(), 1);
-        assert_eq!(count("SELECT COUNT(*) FROM card WHERE deck_path = 'E'"), 1);
-    }
-
-    #[test]
-    fn tidy_drops_old_frames_and_missing_examples() {
+    fn tidy_keeps_developed_and_drops_orphans() {
         let dir = tempfile::tempdir().unwrap();
         let cache = dir.path().join("cache");
         let conn = Connection::open_in_memory().unwrap();
@@ -884,12 +930,12 @@ mod tests {
         for id in ["1", "2", "3", "4", "99"] {
             fs::create_dir_all(cache.join(id)).unwrap();
         }
-        let (dirs, examples) = tidy(&conn, &cache, 900000000000 + 1000).unwrap();
-        assert_eq!((dirs, examples), (3, 1));
-        assert!(cache.join("1").exists() && cache.join("3").exists());
+        let (dirs, examples) = tidy(&conn, &cache).unwrap();
+        assert_eq!((dirs, examples), (1, 1));
+        assert!(["1", "2", "3", "4"].iter().all(|id| cache.join(id).exists()) && !cache.join("99").exists());
         let stage = |id: i64| conn.query_row("SELECT stage FROM card WHERE id = ?1", params![id], |r| r.get::<_, String>(0)).unwrap();
-        assert_eq!((stage(1).as_str(), stage(2).as_str(), stage(3).as_str(), stage(4).as_str()), ("embedded", "meta", "embedded", "meta"));
-        assert_eq!(conn.query_row("SELECT COUNT(*) FROM embedding", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
+        assert_eq!((stage(1).as_str(), stage(2).as_str(), stage(3).as_str(), stage(4).as_str()), ("embedded", "embedded", "embedded", "frames"));
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM embedding", [], |r| r.get::<_, i64>(0)).unwrap(), 3);
         assert_eq!(conn.query_row("SELECT COUNT(*) FROM example", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
     }
 
