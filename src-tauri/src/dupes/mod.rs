@@ -87,7 +87,7 @@ pub fn forget_missing(conn: &Connection) -> rusqlite::Result<usize> {
         .prepare("SELECT path FROM fingerprint")?
         .query_map([], |r| r.get::<_, String>(0))?
         .filter_map(|r| r.ok())
-        .filter(|p| !Path::new(p).exists())
+        .filter(|p| crate::deck::surely_gone(Path::new(p)))
         .collect();
     for p in &gone {
         conn.execute("DELETE FROM fingerprint WHERE path = ?1", params![p])?;

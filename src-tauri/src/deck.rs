@@ -71,6 +71,10 @@ pub fn is_photo(path: &Path) -> bool {
     has_ext(path, &PHOTO_EXT)
 }
 
+pub fn surely_gone(path: &Path) -> bool {
+    !path.exists() && path.parent().is_some_and(Path::is_dir)
+}
+
 pub fn is_media(path: &Path) -> bool {
     is_video(path) || is_photo(path)
 }
@@ -292,6 +296,17 @@ mod tests {
     use super::*;
     use crate::db;
     use tempfile::TempDir;
+
+    #[test]
+    fn surely_gone_only_when_folder_is_reachable() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("a.mp4");
+        fs::write(&file, b"x").unwrap();
+        assert!(!surely_gone(&file));
+        fs::remove_file(&file).unwrap();
+        assert!(surely_gone(&file));
+        assert!(!surely_gone(&dir.path().join("offline").join("b.mp4")));
+    }
 
     #[test]
     #[ignore]

@@ -162,7 +162,7 @@ export default function App() {
       )}
       {state && !showStart && ready && !developView && screen === "deck" && (
         <DeckScreen
-          key={state.settings.deck_path}
+          key={`${state.settings.deck_path}|${state.settings.table_path}`}
           initial={state}
           banner={
             explorer && (

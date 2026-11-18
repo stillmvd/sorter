@@ -615,7 +615,7 @@ pub fn tidy(conn: &Connection, cache: &Path, now: i64) -> rusqlite::Result<(usiz
         .prepare("SELECT id, path FROM example")?
         .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
         .filter_map(|r| r.ok())
-        .filter(|(_, p)| !Path::new(p).exists())
+        .filter(|(_, p)| deck::surely_gone(Path::new(p)))
         .map(|(id, _)| id)
         .collect();
     for id in &missing {
@@ -875,7 +875,12 @@ mod tests {
         .unwrap();
         let kept = dir.path().join("kept.mp4");
         fs::write(&kept, b"x").unwrap();
-        conn.execute("INSERT INTO example(pile_id, path, vector) VALUES (1, ?1, x'00'), (1, 'Z:/nope.mp4', x'00')", params![kept.to_string_lossy()]).unwrap();
+        let removed = dir.path().join("removed.mp4");
+        conn.execute(
+            "INSERT INTO example(pile_id, path, vector) VALUES (1, ?1, x'00'), (1, ?2, x'00'), (1, 'Q:/offline/disk.mp4', x'00')",
+            params![kept.to_string_lossy(), removed.to_string_lossy()],
+        )
+        .unwrap();
         for id in ["1", "2", "3", "4", "99"] {
             fs::create_dir_all(cache.join(id)).unwrap();
         }
@@ -885,6 +890,7 @@ mod tests {
         let stage = |id: i64| conn.query_row("SELECT stage FROM card WHERE id = ?1", params![id], |r| r.get::<_, String>(0)).unwrap();
         assert_eq!((stage(1).as_str(), stage(2).as_str(), stage(3).as_str(), stage(4).as_str()), ("embedded", "meta", "embedded", "meta"));
         assert_eq!(conn.query_row("SELECT COUNT(*) FROM embedding", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM example", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
     }
 
     #[test]

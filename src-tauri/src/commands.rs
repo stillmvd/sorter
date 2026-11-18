@@ -135,7 +135,7 @@ pub fn get_state(state: State<AppState>) -> AppResult<StateView> {
     let conn = state.read()?;
     if let Ok((_, t)) = paths(&conn)
         && Path::new(&t).is_dir() {
-            piles::sync(&conn, &t)?;
+            let _ = piles::sync(&conn, &t);
         }
     state.wake.store(true, Ordering::Relaxed);
     snapshot(&conn, &state)
@@ -151,6 +151,9 @@ fn choose(conn: &Connection, key: &str, other: &str, path: &str) -> AppResult<()
     let p = Path::new(path);
     if !p.is_dir() {
         return Err(AppError::new("NO_FOLDER", "Такой папки нет — выбери другую."));
+    }
+    if std::fs::read_dir(p).is_err() {
+        return Err(AppError::new("NO_ACCESS", "Не получается прочитать эту папку — проверь доступ или выбери другую."));
     }
     if let Some(o) = get_setting(conn, other)?
         && nested(p, Path::new(&o)) {

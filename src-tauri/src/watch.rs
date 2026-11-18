@@ -52,6 +52,14 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, wake: Arc<AtomicBool>) {
                 continue;
             }
             retry = false;
+            let now = (
+                db::get_setting(&conn, "deck_path").ok().flatten(),
+                db::get_setting(&conn, "table_path").ok().flatten(),
+            );
+            if now != watched {
+                retry = true;
+                continue;
+            }
             if let Some(d) = &deck_path
                 && let Ok(r) = deck::sync(&conn, d) {
                     retry = r.pending;

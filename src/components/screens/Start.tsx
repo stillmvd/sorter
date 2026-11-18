@@ -67,11 +67,12 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
         setDeckInfo(await ipc.chooseDeck(path));
       } else await ipc.chooseTable(path);
       setErrors((e) => ({ ...e, [which]: undefined }));
-      onChange();
     } catch (e) {
+      if (which === "deck") setDeckInfo(null);
       setErrors((x) => ({ ...x, [which]: errorText(e) }));
     } finally {
       setReading(null);
+      onChange();
     }
   };
 
@@ -94,7 +95,7 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
             note={reading ? `Читаю папку… нашёл ${nf(found)} ${plural(found, "файл", "файла", "файлов")}` : deck ? `Колода — ${count} ${plural(count, "видео", "видео", "видео")}${deckInfo ? ` · ${gb(deckInfo.bytes)}` : ""}. Берутся только видео в самой папке, вложенные не трогаю.` : "Колода — папка с неразобранными видео."}
             error={errors.deck ?? gone("deck")}
             action={
-              <Button variant={deck ? "secondary" : "primary"} onClick={() => pick("deck")}>
+              <Button variant={deck ? "secondary" : "primary"} disabled={!!reading} onClick={() => pick("deck")}>
                 {deck ? "Другая папка" : "Выбрать папку"}
               </Button>
             }
@@ -113,7 +114,7 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
             }
             error={errors.table ?? gone("table")}
             action={
-              <Button variant={table || !deck ? "secondary" : "primary"} onClick={() => pick("table")}>
+              <Button variant={table || !deck ? "secondary" : "primary"} disabled={!!reading} onClick={() => pick("table")}>
                 {table ? "Другая папка" : "Выбрать папку"}
               </Button>
             }
@@ -140,7 +141,7 @@ export function Start({ state, onChange, onStart }: { state: AppState; onChange:
         </div>
         <div className="flex-1" />
         <div className="flex items-center gap-3">
-          <Button variant="primary" size={48} disabled={!deck || !table || state.missing.length > 0} onClick={onStart}>
+          <Button variant="primary" size={48} disabled={!deck || !table || !!reading || state.missing.length > 0} onClick={onStart}>
             Разобрать колоду
           </Button>
           {(!deck || !table) && <span className="text-[13px] text-dim">Сначала выбери {deck ? "стол" : "колоду"}</span>}

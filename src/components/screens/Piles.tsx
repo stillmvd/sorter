@@ -33,7 +33,7 @@ function NameField({ initial, onSave, onCancel }: { initial: string; onSave: (na
       onFocus={(e) => e.target.select()}
       onKeyDown={(e) => {
         e.stopPropagation();
-        if (e.key === "Enter" && value.trim()) onSave(value.trim());
+        if (e.key === "Enter" && !e.nativeEvent.isComposing && value.trim()) onSave(value.trim());
         if (e.key === "Escape") onCancel();
       }}
       onBlur={onCancel}
