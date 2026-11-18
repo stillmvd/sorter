@@ -186,7 +186,7 @@ mod tests {
         let deck = dir.path().join("deck");
         fs::create_dir_all(&deck).unwrap();
         fs::write(deck.join("d.mp4"), b"d").unwrap();
-        db::set_setting(&conn, "deck_path", &deck.to_string_lossy()).unwrap();
+        db::open_deck(&conn, &deck.to_string_lossy());
         conn.execute("INSERT INTO card(deck_path, file_name, size, mtime, position) VALUES (?1, 'd.mp4', 1, 0, 0)", params![deck.to_string_lossy()]).unwrap();
         let spec = SearchSpec { piles: vec!["Друзья".into()], ..Default::default() };
         assert_eq!(files(&conn, &spec).unwrap().len(), 1);

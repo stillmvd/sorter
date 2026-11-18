@@ -5,6 +5,7 @@ use crate::error::{AppError, AppResult};
 use crate::hints;
 use crate::moves::{self, MoveView};
 use crate::piles::{self, PileView};
+use crate::review;
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -26,7 +27,7 @@ pub struct AppState {
 const USER_KEYS: [&str; 9] =
     ["hints_enabled", "theme", "muted", "mode", "volume", "kind_filter", "series_rest", "dupes_enabled", "dupes_scope"];
 const SETTING_KEYS: [&str; 12] = [
-    "deck_path",
+    "review_id",
     "table_path",
     "hints_enabled",
     "theme",
@@ -54,22 +55,25 @@ impl AppState {
     pub fn roots(&self) -> Vec<PathBuf> {
         let mut roots = vec![self.data_dir.join("cache")];
         if let Ok(conn) = self.read() {
-            for key in ["deck_path", "table_path"] {
-                if let Ok(Some(p)) = get_setting(&conn, key) {
-                    roots.push(PathBuf::from(p));
-                }
+            if let Ok(Some(p)) = get_setting(&conn, "table_path") {
+                roots.push(PathBuf::from(p));
+            }
+            if let Ok(list) = conn.prepare("SELECT path FROM review_root").and_then(|mut st| {
+                st.query_map([], |r| r.get::<_, String>(0)).map(|it| it.filter_map(|r| r.ok()).collect::<Vec<_>>())
+            }) {
+                roots.extend(list.into_iter().map(PathBuf::from));
             }
         }
         roots
     }
 }
 
-fn paths(conn: &Connection) -> AppResult<(String, String)> {
-    let deck = get_setting(conn, "deck_path")?;
+fn paths(conn: &Connection) -> AppResult<(i64, String)> {
+    let review = review::open_id(conn)?;
     let table = get_setting(conn, "table_path")?;
-    match (deck, table) {
-        (Some(d), Some(t)) => Ok((d, t)),
-        _ => Err(AppError::new("NOT_READY", "Сначала выбери колоду и стол.")),
+    match (review, table) {
+        (Some(r), Some(t)) => Ok((r, t)),
+        _ => Err(AppError::new("NOT_READY", "Сначала открой разбор")),
     }
 }
 
@@ -97,6 +101,7 @@ pub struct StateView {
     deck: DeckCounts,
     piles: Vec<PileView>,
     missing: Vec<&'static str>,
+    review: Option<String>,
 }
 
 fn snapshot(conn: &Connection, state: &AppState) -> AppResult<StateView> {
@@ -107,19 +112,25 @@ fn snapshot(conn: &Connection, state: &AppState) -> AppResult<StateView> {
         }
     }
     let (deck, piles) = match paths(conn) {
-        Ok((d, t)) => {
-            let (left, placed) = deck::counts(conn, &d)?;
-            let (video, photo) = deck::counts_by_kind(conn, &d)?;
+        Ok((_, t)) => {
+            let (left, placed) = deck::counts(conn)?;
+            let (video, photo) = deck::counts_by_kind(conn)?;
             (DeckCounts { total: left + placed, left, placed, by_kind: ByKind { video, photo } }, piles::list(conn, &t)?)
         }
         Err(_) => (DeckCounts { total: 0, left: 0, placed: 0, by_kind: ByKind::default() }, Vec::new()),
     };
     let developing = crate::develop::status(conn, state.paused.load(Ordering::Relaxed), dupes::printed(conn)?)?;
-    let missing = [("deck_path", "deck"), ("table_path", "table")]
-        .into_iter()
-        .filter(|(key, _)| settings.get(*key).is_some_and(|p| !Path::new(p).is_dir()))
-        .map(|(_, name)| name)
-        .collect();
+    let mut missing: Vec<&'static str> = settings
+        .get("table_path")
+        .filter(|p| settings.contains_key("review_id") && !Path::new(p.as_str()).is_dir())
+        .map(|_| vec!["table"])
+        .unwrap_or_default();
+    if deck.left == 0
+        && let Ok((r, _)) = paths(conn)
+        && review::offline_left(conn, r)? > 0
+    {
+        missing.push("deck");
+    }
     Ok(StateView {
         cache_dir: state.data_dir.join("cache").to_string_lossy().into_owned(),
         developing,
@@ -127,6 +138,7 @@ fn snapshot(conn: &Connection, state: &AppState) -> AppResult<StateView> {
         deck,
         piles,
         missing,
+        review: paths(conn).ok().map(|(r, _)| review::label(conn, r)).transpose()?,
     })
 }
 
@@ -141,74 +153,90 @@ pub fn get_state(state: State<AppState>) -> AppResult<StateView> {
     snapshot(&conn, &state)
 }
 
-fn nested(a: &Path, b: &Path) -> bool {
-    let a = format!("{}\\", a.to_string_lossy().to_lowercase().trim_end_matches('\\'));
-    let b = format!("{}\\", b.to_string_lossy().to_lowercase().trim_end_matches('\\'));
-    a.starts_with(&b) || b.starts_with(&a)
-}
-
-fn choose(conn: &Connection, key: &str, other: &str, path: &str) -> AppResult<()> {
-    let p = Path::new(path);
-    if !p.is_dir() {
-        return Err(AppError::new("NO_FOLDER", "Такой папки нет — выбери другую."));
-    }
-    if std::fs::read_dir(p).is_err() {
-        return Err(AppError::new("NO_ACCESS", "Не получается прочитать эту папку — проверь доступ или выбери другую."));
-    }
-    if let Some(o) = get_setting(conn, other)?
-        && nested(p, Path::new(&o)) {
-            return Err(AppError::new(
-                "NESTED",
-                "Колода и стол не могут совпадать или лежать друг в друге — иначе Sorter начнёт раскладывать уже разложенное.",
-            ));
-        }
-    Ok(set_setting(conn, key, path)?)
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Chosen {
-    count: i64,
-    bytes: i64,
+#[tauri::command(async)]
+pub fn home(state: State<AppState>) -> AppResult<review::Home> {
+    let conn = crate::db::open(&state.db_path)?;
+    review::home(&conn)
 }
 
 #[tauri::command(async)]
-pub fn choose_deck(app: AppHandle, state: State<AppState>, path: String) -> AppResult<Chosen> {
-    {
-        let conn = state.conn();
-        choose(&conn, "deck_path", "table_path", &path)?;
-    }
-    state.paused.store(false, Ordering::Relaxed);
+pub fn add_roots(app: AppHandle, state: State<AppState>, paths: Vec<String>) -> AppResult<review::Draft> {
     let conn = crate::db::open(&state.db_path)?;
-    deck::sync_seen(&conn, &path, &mut |found| {
-        let _ = app.emit("deck://reading", found);
+    let draft = review::add_roots(&conn, &paths, &mut |path, found| {
+        let _ = app.emit("deck://reading", serde_json::json!({ "path": path, "found": found }));
     })?;
-    crate::develop::drop_lost_frames(&conn, &state.data_dir.join("cache"), &path)?;
     state.wake.store(true, Ordering::Relaxed);
-    Ok(conn.query_row(
-        "SELECT COUNT(*), COALESCE(SUM(size), 0) FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred')",
-        params![path],
-        |r| Ok(Chosen { count: r.get(0)?, bytes: r.get(1)? }),
-    )?)
+    Ok(draft)
 }
 
 #[tauri::command]
-pub fn cancel_deck(state: State<AppState>) -> AppResult<()> {
-    state.conn().execute("DELETE FROM settings WHERE key = 'deck_path'", [])?;
+pub fn remove_root(state: State<AppState>, path: String) -> AppResult<review::Draft> {
+    review::remove_root(&state.conn(), &path)
+}
+
+#[tauri::command(async)]
+pub fn set_draft_table(state: State<AppState>, path: String) -> AppResult<review::Draft> {
+    let conn = crate::db::open(&state.db_path)?;
+    review::set_table(&conn, &path)
+}
+
+#[tauri::command]
+pub fn stop_reading() {
+    review::STOP.store(true, Ordering::Relaxed);
+}
+
+#[tauri::command]
+pub fn start_review(state: State<AppState>) -> AppResult<review::ReviewView> {
+    let view = review::start(&state.conn())?;
+    after_open(&state);
+    Ok(view)
+}
+
+fn after_open(state: &AppState) {
+    state.paused.store(false, Ordering::Relaxed);
+    if let Ok(conn) = state.read() {
+        let _ = crate::develop::drop_lost_frames(&conn, &state.data_dir.join("cache"));
+        if let Ok((_, t)) = paths(&conn)
+            && Path::new(&t).is_dir()
+        {
+            let _ = piles::sync(&conn, &t);
+        }
+    }
+    state.wake.store(true, Ordering::Relaxed);
+}
+
+#[tauri::command(async)]
+pub fn open_review(state: State<AppState>, id: i64) -> AppResult<review::ReviewView> {
+    let view = review::open(&state.conn(), id)?;
+    let conn = crate::db::open(&state.db_path)?;
+    let stop = AtomicBool::new(false);
+    for root in view.roots.iter().filter(|r| r.online) {
+        let _ = deck::sync_seen(&conn, &root.path, &stop, &mut |_| {});
+    }
+    after_open(&state);
+    review::open(&conn, id)
+}
+
+#[tauri::command]
+pub fn drop_review(state: State<AppState>, id: i64) -> AppResult<()> {
+    review::drop_review(&state.conn(), id)?;
+    state.wake.store(true, Ordering::Relaxed);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn close_review(state: State<AppState>) -> AppResult<()> {
+    review::close(&state.conn())?;
     state.wake.store(true, Ordering::Relaxed);
     Ok(())
 }
 
 #[tauri::command(async)]
-pub fn choose_table(state: State<AppState>, path: String) -> AppResult<Vec<PileView>> {
-    {
-        let conn = state.conn();
-        choose(&conn, "table_path", "deck_path", &path)?;
-    }
+pub fn recheck(state: State<AppState>) -> AppResult<review::Home> {
     let conn = crate::db::open(&state.db_path)?;
-    piles::sync(&conn, &path)?;
+    let home = review::home(&conn)?;
     state.wake.store(true, Ordering::Relaxed);
-    piles::list(&conn, &path)
+    Ok(home)
 }
 
 #[tauri::command]
@@ -248,14 +276,14 @@ pub fn folder_arg<I: IntoIterator<Item = String>>(args: I) -> Option<String> {
 #[tauri::command(async)]
 pub fn deck_window(state: State<AppState>, from: i64, count: i64, kind: Option<String>) -> AppResult<Vec<CardView>> {
     let conn = state.read()?;
-    let (d, _) = paths(&conn)?;
+    paths(&conn)?;
     let kind = kind.filter(|k| k == "video" || k == "photo").unwrap_or_else(|| "all".into());
-    deck::window(&conn, &d, from, count, &kind)
+    deck::window(&conn, from, count, &kind)
 }
 
 fn regroup(app: &AppHandle, conn: &Connection) {
-    if let Ok((d, _)) = paths(conn)
-        && series::regroup(conn, &d).unwrap_or(false) {
+    if paths(conn).is_ok()
+        && series::regroup(conn).unwrap_or(false) {
             let _ = app.emit("deck://series", ());
         }
 }
@@ -386,8 +414,9 @@ pub fn cache_info(state: State<AppState>) -> CacheInfo {
 #[tauri::command]
 pub fn clear_cache(state: State<AppState>) -> AppResult<u64> {
     let conn = state.conn();
-    let open = [get_setting(&conn, "deck_path")?.unwrap_or_default(), get_setting(&conn, "table_path")?.unwrap_or_default()];
-    let freed = crate::develop::clear_cache(&conn, &state.data_dir.join("cache"), &[open[0].as_str(), open[1].as_str()])?;
+    let mut keep = deck::open_roots(&conn)?;
+    keep.extend(get_setting(&conn, "table_path")?);
+    let freed = crate::develop::clear_cache(&conn, &state.data_dir.join("cache"), &keep)?;
     state.wake.store(true, Ordering::Relaxed);
     Ok(freed)
 }
@@ -441,6 +470,24 @@ pub fn dismiss_dupe(state: State<AppState>, a: String, b: String) -> AppResult<(
     dupes::dismiss(&state.conn(), &a, &b)
 }
 
+#[tauri::command(async)]
+pub fn empty_dirs(state: State<AppState>) -> AppResult<Vec<String>> {
+    let conn = state.read()?;
+    match review::open_id(&conn)? {
+        Some(r) => review::empty_dirs(&conn, r),
+        None => Ok(Vec::new()),
+    }
+}
+
+#[tauri::command]
+pub fn trash_dirs(state: State<AppState>, paths: Vec<String>) -> AppResult<Placed> {
+    let mut conn = state.conn();
+    let (r, t) = self::paths(&conn)?;
+    let dirs = review::check_empty(&conn, r, &paths)?;
+    let mv = moves::trash_dirs(&mut conn, &dirs)?;
+    Ok(Placed { mv, piles: piles::list(&conn, &t)? })
+}
+
 #[tauri::command]
 pub fn trash_copies(app: AppHandle, state: State<AppState>, paths: Vec<String>) -> AppResult<Placed> {
     let mut conn = state.conn();
@@ -464,8 +511,8 @@ pub fn replace_copy(app: AppHandle, state: State<AppState>, card_id: i64, worse_
 #[tauri::command(async)]
 pub fn deck_series(state: State<AppState>) -> AppResult<Vec<SeriesView>> {
     let conn = state.read()?;
-    let (d, _) = paths(&conn)?;
-    series::list(&conn, &d)
+    paths(&conn)?;
+    series::list(&conn)
 }
 
 #[tauri::command]

@@ -201,14 +201,13 @@ pub fn orientation(w: u32, h: u32) -> &'static str {
 }
 
 fn next(conn: &Connection, limit: usize, held: &HashSet<i64>) -> rusqlite::Result<Vec<(i64, PathBuf)>> {
-    let deck = db::get_setting(conn, "deck_path")?.unwrap_or_default();
     let mut stmt = conn.prepare(
         "SELECT id, deck_path, file_name, status, current_path FROM card
          WHERE stage = 'new' AND status != 'gone' AND (current_path IS NOT NULL OR status != 'placed')
-           AND (deck_path = ?1 OR status = 'placed')
-         ORDER BY (deck_path = ?1 AND status = 'in_deck') DESC, status = 'deferred', position LIMIT ?2",
+           AND (deck_path IN (SELECT path FROM open_root) OR status = 'placed')
+         ORDER BY (deck_path IN (SELECT path FROM open_root) AND status = 'in_deck') DESC, status = 'deferred', position LIMIT ?1",
     )?;
-    let rows = stmt.query_map(params![deck, (limit + held.len()) as i64], |r| {
+    let rows = stmt.query_map(params![(limit + held.len()) as i64], |r| {
         let (id, d, name, status, current): (i64, String, String, String, Option<String>) =
             (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?);
         let path = match (status.as_str(), current) {
@@ -221,11 +220,10 @@ fn next(conn: &Connection, limit: usize, held: &HashSet<i64>) -> rusqlite::Resul
 }
 
 pub fn status(conn: &Connection, paused: bool, printed: (i64, i64)) -> rusqlite::Result<Status> {
-    let deck = db::get_setting(conn, "deck_path")?.unwrap_or_default();
     let (total, done, embedded): (i64, i64, i64) = conn.query_row(
         "SELECT COUNT(*), COALESCE(SUM(stage != 'new'), 0), COALESCE(SUM(stage IN ('embedded','broken')), 0)
-         FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred')",
-        params![deck],
+         FROM card WHERE deck_path IN (SELECT path FROM open_root) AND status IN ('in_deck','deferred')",
+        [],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
     let hints = hints::enabled(conn) && !HINTS_FAILED.load(Ordering::Relaxed);
@@ -534,12 +532,11 @@ pub fn cache_size(cache: &Path) -> (u64, usize) {
     (walk(cache), cards)
 }
 
-pub fn clear_cache(conn: &Connection, cache: &Path, open: &[&str]) -> rusqlite::Result<u64> {
+pub fn clear_cache(conn: &Connection, cache: &Path, keep_under: &[String]) -> rusqlite::Result<u64> {
     let (before, _) = cache_size(cache);
-    let deck = open.first().copied().unwrap_or_default();
     let keep: HashSet<String> = conn
-        .prepare("SELECT id FROM card WHERE deck_path = ?1")?
-        .query_map(params![deck], |r| r.get::<_, i64>(0))?
+        .prepare(&format!("SELECT id FROM card WHERE {}", deck::IN_OPEN))?
+        .query_map([], |r| r.get::<_, i64>(0))?
         .filter_map(|r| r.ok())
         .map(|id| id.to_string())
         .collect();
@@ -550,37 +547,36 @@ pub fn clear_cache(conn: &Connection, cache: &Path, open: &[&str]) -> rusqlite::
             }
         }
     }
-    let prefix = |p: &str| {
-        if p.is_empty() { "\u{1}".to_string() } else { format!("{}{}", p.trim_end_matches(['\\', '/']), std::path::MAIN_SEPARATOR) }
-    };
-    let (a, b) = (prefix(deck), prefix(open.get(1).copied().unwrap_or_default()));
+    let prints: Vec<String> = conn.prepare("SELECT path FROM fingerprint")?.query_map([], |r| r.get(0))?.filter_map(|r| r.ok()).collect();
     let tx = conn.unchecked_transaction()?;
-    tx.execute(
-        "DELETE FROM fingerprint WHERE substr(path, 1, length(?1)) != ?1 AND substr(path, 1, length(?2)) != ?2",
-        params![a, b],
-    )?;
+    for p in prints.iter().filter(|p| !keep_under.iter().any(|k| crate::paths::is_inside(p, k))) {
+        tx.execute("DELETE FROM fingerprint WHERE path = ?1", params![p])?;
+    }
     tx.execute(
         "DELETE FROM dupe WHERE a NOT IN (SELECT path FROM fingerprint) OR b NOT IN (SELECT path FROM fingerprint)",
         [],
     )?;
-    tx.execute("DELETE FROM embedding WHERE card_id IN (SELECT id FROM card WHERE deck_path != ?1)", params![deck])?;
+    tx.execute(&format!("DELETE FROM embedding WHERE card_id IN (SELECT id FROM card WHERE NOT {})", deck::IN_OPEN), [])?;
     tx.execute(
-        "UPDATE card SET stage = CASE WHEN status IN ('in_deck','deferred') THEN 'new' ELSE 'meta' END, frames = 0
-         WHERE stage IN ('frames','embedded') AND deck_path != ?1",
-        params![deck],
+        &format!(
+            "UPDATE card SET stage = CASE WHEN status IN ('in_deck','deferred') THEN 'new' ELSE 'meta' END, frames = 0
+             WHERE stage IN ('frames','embedded') AND NOT {}",
+            deck::IN_OPEN
+        ),
+        [],
     )?;
     tx.commit()?;
     let (after, _) = cache_size(cache);
     Ok(before.saturating_sub(after))
 }
 
-pub fn drop_lost_frames(conn: &Connection, cache: &Path, deck: &str) -> rusqlite::Result<usize> {
+pub fn drop_lost_frames(conn: &Connection, cache: &Path) -> rusqlite::Result<usize> {
     let dirs: HashSet<String> = fs::read_dir(cache)
         .map(|it| it.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect())
         .unwrap_or_default();
     let lost: Vec<i64> = conn
-        .prepare("SELECT id FROM card WHERE deck_path = ?1 AND stage IN ('frames','embedded')")?
-        .query_map(params![deck], |r| r.get::<_, i64>(0))?
+        .prepare(&format!("SELECT id FROM card WHERE {} AND stage IN ('frames','embedded')", deck::IN_OPEN))?
+        .query_map([], |r| r.get::<_, i64>(0))?
         .filter_map(|r| r.ok())
         .filter(|id| !dirs.contains(&id.to_string()))
         .collect();
@@ -674,8 +670,7 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, cache: PathBuf, paused: Arc<Atomi
                 series_dirty |= jobs.iter().any(|(_, p)| deck::is_photo(p));
             }
             if series_dirty && (idle || series_at.elapsed() > Duration::from_secs(5)) {
-                let deck_path = db::get_setting(&conn, "deck_path").ok().flatten().unwrap_or_default();
-                if crate::series::regroup(&conn, &deck_path).unwrap_or(false) {
+                if crate::series::regroup(&conn).unwrap_or(false) {
                     let _ = app.emit("deck://series", ());
                 }
                 series_dirty = false;
@@ -792,7 +787,7 @@ mod tests {
         .unwrap();
         let ids = |held: &HashSet<i64>| next(&conn, 4, held).unwrap().into_iter().map(|(id, _)| id).collect::<Vec<_>>();
         assert!(ids(&HashSet::new()).is_empty());
-        db::set_setting(&conn, "deck_path", "D").unwrap();
+        db::open_deck(&conn, "D");
         assert_eq!(ids(&HashSet::new()), vec![1, 2]);
         assert_eq!(ids(&HashSet::from([1])), vec![2]);
     }
@@ -803,6 +798,7 @@ mod tests {
         let cache = dir.path().join("cache");
         let conn = Connection::open_in_memory().unwrap();
         db::init(&conn).unwrap();
+        db::open_deck(&conn, "D");
         conn.execute_batch(
             "INSERT INTO card(id, deck_path, file_name, size, mtime, position, stage, frames, status) VALUES
                (1, 'D', 'a.mp4', 1, 0, 1, 'frames', 8, 'in_deck'),
@@ -812,7 +808,7 @@ mod tests {
         )
         .unwrap();
         fs::create_dir_all(cache.join("1")).unwrap();
-        assert_eq!(drop_lost_frames(&conn, &cache, "D").unwrap(), 1);
+        assert_eq!(drop_lost_frames(&conn, &cache).unwrap(), 1);
         let stage = |id: i64| conn.query_row("SELECT stage FROM card WHERE id = ?1", params![id], |r| r.get::<_, String>(0)).unwrap();
         assert_eq!((stage(1).as_str(), stage(2).as_str(), stage(3).as_str()), ("frames", "new", "embedded"));
         assert_eq!(conn.query_row("SELECT COUNT(*) FROM embedding", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
@@ -824,6 +820,7 @@ mod tests {
         let cache = dir.path().join("cache");
         let conn = Connection::open_in_memory().unwrap();
         db::init(&conn).unwrap();
+        db::open_deck(&conn, "D");
         conn.execute_batch(
             "INSERT INTO card(id, deck_path, file_name, size, mtime, position, stage, frames, status) VALUES
                (1, 'D', 'a.mp4', 1, 0, 1, 'embedded', 8, 'in_deck'),
@@ -842,7 +839,7 @@ mod tests {
             fs::create_dir_all(cache.join(id)).unwrap();
             fs::write(cache.join(id).join("0.jpg"), [0u8; 100]).unwrap();
         }
-        assert_eq!(clear_cache(&conn, &cache, &["D", ""]).unwrap(), 100);
+        assert_eq!(clear_cache(&conn, &cache, &["D".to_string()]).unwrap(), 100);
         assert!(cache.join("1").exists() && !cache.join("2").exists());
         let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
         assert_eq!(
@@ -885,7 +882,7 @@ mod tests {
         fs::write(deck.join("a.mp4"), b"a").unwrap();
         let conn = Connection::open_in_memory().unwrap();
         db::init(&conn).unwrap();
-        db::set_setting(&conn, "deck_path", &deck.to_string_lossy()).unwrap();
+        db::open_deck(&conn, &deck.to_string_lossy());
         conn.execute(
             "INSERT INTO card(deck_path, file_name, size, mtime, position, stage, frames) VALUES (?1, 'a.mp4', 1, 0, 0, 'frames', 8)",
             params![deck.to_string_lossy()],

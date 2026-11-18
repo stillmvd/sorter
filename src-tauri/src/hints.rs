@@ -165,12 +165,11 @@ pub fn card_frames(cache: &Path, id: i64) -> Vec<RgbImage> {
 }
 
 pub fn to_embed(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<i64>> {
-    let deck = db::get_setting(conn, "deck_path")?.unwrap_or_default();
     let mut stmt = conn.prepare(
         "SELECT id FROM card WHERE stage = 'frames' AND status != 'gone'
-         ORDER BY (deck_path = ?1 AND status = 'in_deck') DESC, status = 'placed', status = 'deferred', position LIMIT ?2",
+         ORDER BY (deck_path IN (SELECT path FROM open_root) AND status = 'in_deck') DESC, status = 'placed', status = 'deferred', position LIMIT ?1",
     )?;
-    let rows = stmt.query_map(params![deck, limit as i64], |r| r.get(0))?;
+    let rows = stmt.query_map(params![limit as i64], |r| r.get(0))?;
     rows.collect()
 }
 

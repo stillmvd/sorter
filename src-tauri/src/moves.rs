@@ -37,6 +37,7 @@ pub struct MoveView {
     pub is_trash: bool,
     pub state: String,
     pub error: Option<String>,
+    pub review: Option<String>,
     pub items: Vec<MoveItemView>,
 }
 
@@ -216,12 +217,16 @@ fn load_items(conn: &Connection, move_id: i64) -> AppResult<Vec<Item>> {
 }
 
 pub fn load_move(conn: &Connection, move_id: i64) -> AppResult<MoveView> {
-    let (at, method, pile_id, state, error, pile_name, is_trash) = conn.query_row(
-        "SELECT m.at, m.method, m.pile_id, m.state, m.error, p.name, p.is_trash
+    let (at, method, pile_id, state, error, pile_name, is_trash, review_id) = conn.query_row(
+        "SELECT m.at, m.method, m.pile_id, m.state, m.error, p.name, p.is_trash, m.review_id
          FROM move m JOIN pile p ON p.id = m.pile_id WHERE m.id = ?1",
         params![move_id],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get::<_, Option<i64>>(7)?)),
     )?;
+    let review = match review_id {
+        Some(id) => Some(crate::review::label(conn, id)?).filter(|l| !l.is_empty()),
+        None => None,
+    };
     let items = load_items(conn, move_id)?
         .into_iter()
         .map(|i| MoveItemView {
@@ -233,7 +238,7 @@ pub fn load_move(conn: &Connection, move_id: i64) -> AppResult<MoveView> {
         })
         .collect();
     let pile_name = if is_trash { "Корзина".to_string() } else { pile_name };
-    Ok(MoveView { id: move_id, at, method, pile_id, pile_name, is_trash, state, error, items })
+    Ok(MoveView { id: move_id, at, method, pile_id, pile_name, is_trash, state, error, review, items })
 }
 
 fn roll_back_item(item: &Item, rename: RenameFn) -> AppResult<()> {
@@ -321,14 +326,15 @@ fn move_into(
         let to = if pile.is_trash {
             None
         } else {
-            let name = free_name(&dir, &file_name, &taken);
+            let base = Path::new(&file_name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| file_name.clone());
+            let name = free_name(&dir, &base, &taken);
             taken.push(name.clone());
             Some(dir.join(name))
         };
         items.push(Item { id: 0, card_id: Some(card_id), from: Path::new(&deck_path).join(&file_name), to, step: "planned".into() });
     }
     for path in paths {
-        if !path.is_file() {
+        if !path.is_file() && !(pile.is_trash && method == "dirs" && path.is_dir()) {
             return Err(AppError::new("FILE_NOT_THERE", format!("Файла «{}» уже нет на месте.", file_label(path))));
         }
         let to = if pile.is_trash {
@@ -343,7 +349,7 @@ fn move_into(
 
     let tx = conn.transaction()?;
     tx.execute(
-        "INSERT INTO move(at, method, pile_id, state, group_id) VALUES (?1, ?2, ?3, 'pending', ?4)",
+        "INSERT INTO move(at, method, pile_id, state, group_id, review_id) VALUES (?1, ?2, ?3, 'pending', ?4, (SELECT CAST(value AS INTEGER) FROM settings WHERE key = 'review_id'))",
         params![now_ms(), method, pile_id, group],
     )?;
     let move_id = tx.last_insert_rowid();
@@ -425,14 +431,21 @@ fn trash_pile(conn: &Connection) -> AppResult<i64> {
 }
 
 fn deck_card(conn: &Connection, path: &Path) -> AppResult<Option<i64>> {
-    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else { return Ok(None) };
+    let roots = crate::deck::open_roots(conn)?;
+    let full = path.to_string_lossy();
+    let Some((root, rel)) = crate::deck::split_root(&roots, &full) else { return Ok(None) };
     Ok(conn
         .query_row(
-            "SELECT id FROM card WHERE deck_path = ?1 AND file_name = ?2 AND status IN ('in_deck','deferred')",
-            params![dir.to_string_lossy(), name.to_string_lossy()],
+            "SELECT id FROM card WHERE deck_path = ?1 AND file_name = ?2 COLLATE NOCASE AND status IN ('in_deck','deferred')",
+            params![root, rel],
             |r| r.get(0),
         )
         .optional()?)
+}
+
+pub fn trash_dirs(conn: &mut Connection, dirs: &[PathBuf]) -> AppResult<MoveView> {
+    let trash = trash_pile(conn)?;
+    move_with(conn, &[], dirs, trash, "dirs", None, safe_rename)
 }
 
 pub fn trash_copies(conn: &mut Connection, paths: &[PathBuf]) -> AppResult<MoveView> {
@@ -528,8 +541,11 @@ fn return_cards(conn: &Connection, move_id: i64, items: &[Item]) -> AppResult<()
     let cards: Vec<i64> = items.iter().filter_map(|it| it.card_id).collect();
     if let Some(first) = cards.first() {
         let top: f64 = conn.query_row(
-            "SELECT COALESCE(MIN(c.position), 0) FROM card c
-             WHERE c.status IN ('in_deck','deferred') AND c.deck_path = (SELECT deck_path FROM card WHERE id = ?1)",
+            &format!(
+                "SELECT COALESCE(MIN(c.position), 0) FROM card c
+                 WHERE c.status IN ('in_deck','deferred') AND (c.deck_path = (SELECT deck_path FROM card WHERE id = ?1) OR c.{})",
+                crate::deck::IN_OPEN
+            ),
             params![first],
             |r| r.get(0),
         )?;
@@ -592,6 +608,9 @@ pub fn undo_with(conn: &Connection, move_id: i64, rename: RenameFn) -> AppResult
             }
             Some(to) => {
                 if to.exists() && !it.from.exists() {
+                    if let Some(parent) = it.from.parent() {
+                        fs::create_dir_all(parent).map_err(|e| io_error(&e, parent))?;
+                    }
                     transfer(to, &it.from, rename, || Ok(()))?;
                 }
             }
@@ -616,7 +635,7 @@ pub fn undo_group(conn: &Connection, move_id: i64) -> AppResult<Vec<MoveView>> {
 
 pub fn undo_last(conn: &Connection) -> AppResult<Vec<MoveView>> {
     let last: Option<i64> = conn
-        .query_row("SELECT id FROM move WHERE state = 'done' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
+        .query_row("SELECT id FROM move WHERE state = 'done' AND review_id IS (SELECT CAST(value AS INTEGER) FROM settings WHERE key = 'review_id') ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
         .optional()?;
     Ok(match last {
         Some(id) => undo_group(conn, id)?,
@@ -626,7 +645,7 @@ pub fn undo_last(conn: &Connection) -> AppResult<Vec<MoveView>> {
 
 pub fn undo_since(conn: &Connection, since: i64) -> AppResult<(usize, Vec<String>)> {
     let ids: Vec<i64> = conn
-        .prepare("SELECT id FROM move WHERE state = 'done' AND at >= ?1 ORDER BY id DESC")?
+        .prepare("SELECT id FROM move WHERE state = 'done' AND at >= ?1 AND review_id IS (SELECT CAST(value AS INTEGER) FROM settings WHERE key = 'review_id') ORDER BY id DESC")?
         .query_map(params![since], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
     let mut undone = 0;
@@ -694,7 +713,22 @@ mod tests {
         )
         .unwrap();
         let pile = conn.last_insert_rowid();
+        db::open_deck(&conn, &deck.to_string_lossy());
         Env { _tmp: tmp, deck, table, conn, pile }
+    }
+
+    #[test]
+    fn nested_card_lands_by_name_and_undo_recreates_folder() {
+        let mut e = env();
+        fs::create_dir_all(e.deck.join("t1")).unwrap();
+        let c = card(&e, "t1\\a.mp4", b"aaa");
+        let m = place(&mut e.conn, &[c], e.pile, "key").unwrap();
+        assert!(e.table.join("Мемы").join("a.mp4").exists());
+        assert!(m.review.is_some());
+        fs::remove_dir(e.deck.join("t1")).unwrap();
+        undo(&e.conn, m.id).unwrap();
+        assert!(e.deck.join("t1").join("a.mp4").exists());
+        assert!(undo_last(&e.conn).unwrap().is_empty());
     }
 
     fn card(env: &Env, name: &str, body: &[u8]) -> i64 {

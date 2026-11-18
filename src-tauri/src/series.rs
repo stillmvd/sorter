@@ -52,39 +52,51 @@ fn chains(shots: &[Shot]) -> Vec<Vec<i64>> {
     out
 }
 
-pub fn regroup(conn: &Connection, deck: &str) -> rusqlite::Result<bool> {
-    let shots: Vec<Shot> = conn
-        .prepare(
-            "SELECT id, taken_at, taken_from, phash, look FROM card
-             WHERE deck_path = ?1 AND status IN ('in_deck','deferred') AND kind = 'photo' AND solo = 0
+pub fn regroup(conn: &Connection) -> rusqlite::Result<bool> {
+    let mut folders: BTreeMap<String, Vec<Shot>> = BTreeMap::new();
+    let rows = conn
+        .prepare(&format!(
+            "SELECT id, taken_at, taken_from, phash, look, deck_path, file_name FROM card
+             WHERE {} AND status IN ('in_deck','deferred') AND kind = 'photo' AND solo = 0
                AND phash IS NOT NULL AND taken_at IS NOT NULL
              ORDER BY taken_at, id",
-        )?
-        .query_map(params![deck], |r| {
-            Ok(Shot {
-                id: r.get(0)?,
-                taken: r.get(1)?,
-                from_file: r.get::<_, Option<String>>(2)?.as_deref() == Some("file"),
-                phash: r.get::<_, i64>(3)? as u64,
-                look: r.get::<_, Option<Vec<u8>>>(4)?.unwrap_or_default(),
-            })
+            deck::IN_OPEN
+        ))?
+        .query_map([], |r| {
+            let name: String = r.get(6)?;
+            let folder = format!("{}\\{}", r.get::<_, String>(5)?, crate::paths::parent_dirs(&name).unwrap_or("")).to_lowercase();
+            Ok((
+                folder,
+                Shot {
+                    id: r.get(0)?,
+                    taken: r.get(1)?,
+                    from_file: r.get::<_, Option<String>>(2)?.as_deref() == Some("file"),
+                    phash: r.get::<_, i64>(3)? as u64,
+                    look: r.get::<_, Option<Vec<u8>>>(4)?.unwrap_or_default(),
+                },
+            ))
         })?
-        .collect::<Result<_, _>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
+    for (folder, shot) in rows {
+        folders.entry(folder).or_default().push(shot);
+    }
     let mut wanted: BTreeMap<i64, i64> = BTreeMap::new();
-    for chain in chains(&shots) {
-        for id in &chain {
-            wanted.insert(*id, chain[0]);
+    for shots in folders.values() {
+        for chain in chains(shots) {
+            for id in &chain {
+                wanted.insert(*id, chain[0]);
+            }
         }
     }
     let current: BTreeMap<i64, i64> = conn
-        .prepare("SELECT id, series_id FROM card WHERE deck_path = ?1 AND series_id IS NOT NULL")?
-        .query_map(params![deck], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .prepare(&format!("SELECT id, series_id FROM card WHERE {} AND series_id IS NOT NULL", deck::IN_OPEN))?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<Result<_, _>>()?;
     if current == wanted {
         return Ok(false);
     }
     let tx = conn.unchecked_transaction()?;
-    tx.execute("UPDATE card SET series_id = NULL WHERE deck_path = ?1 AND series_id IS NOT NULL", params![deck])?;
+    tx.execute(&format!("UPDATE card SET series_id = NULL WHERE {} AND series_id IS NOT NULL", deck::IN_OPEN), [])?;
     for (id, series) in &wanted {
         tx.execute("UPDATE card SET series_id = ?2 WHERE id = ?1", params![id, series])?;
     }
@@ -92,14 +104,15 @@ pub fn regroup(conn: &Connection, deck: &str) -> rusqlite::Result<bool> {
     Ok(true)
 }
 
-pub fn list(conn: &Connection, deck: &str) -> AppResult<Vec<SeriesView>> {
+pub fn list(conn: &Connection) -> AppResult<Vec<SeriesView>> {
     let sql = format!(
-        "SELECT {CARD_COLUMNS}, sharp FROM card WHERE deck_path = ?1 AND series_id IS NOT NULL AND status IN ('in_deck','deferred')
-         ORDER BY series_id, taken_at, id"
+        "SELECT {CARD_COLUMNS}, sharp FROM card WHERE {} AND series_id IS NOT NULL AND status IN ('in_deck','deferred')
+         ORDER BY series_id, taken_at, id",
+        deck::IN_OPEN
     );
     let rows: Vec<(CardView, f64)> = conn
         .prepare(&sql)?
-        .query_map(params![deck], |r| Ok((deck::card_from_row(r)?, r.get::<_, Option<f64>>(17)?.unwrap_or(0.0))))?
+        .query_map([], |r| Ok((deck::card_from_row(r)?, r.get::<_, Option<f64>>(17)?.unwrap_or(0.0))))?
         .collect::<Result<_, _>>()?;
     let mut out: Vec<SeriesView> = Vec::new();
     let mut score = f64::MIN;
@@ -143,6 +156,7 @@ mod tests {
     fn fixture(rows: &[(&str, i64, &str, u64)]) -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         db::init(&conn).unwrap();
+        db::open_deck(&conn, "D");
         for (i, (name, taken, from, phash)) in rows.iter().enumerate() {
             conn.execute(
                 "INSERT INTO card(deck_path, file_name, size, mtime, position, kind, taken_at, taken_from, phash, sharp, width, height)
@@ -155,7 +169,7 @@ mod tests {
     }
 
     fn series(conn: &Connection) -> Vec<Vec<String>> {
-        list(conn, "D").unwrap().into_iter().map(|s| s.cards.into_iter().map(|c| c.file_name).collect()).collect()
+        list(conn).unwrap().into_iter().map(|s| s.cards.into_iter().map(|c| c.file_name).collect()).collect()
     }
 
     #[test]
@@ -170,12 +184,12 @@ mod tests {
             ("f", 60_000, "exif", 0),
             ("g", 61_000, "exif", 1),
         ]);
-        assert!(regroup(&conn, "D").unwrap());
-        assert!(!regroup(&conn, "D").unwrap());
+        assert!(regroup(&conn).unwrap());
+        assert!(!regroup(&conn).unwrap());
         assert_eq!(series(&conn), vec![vec!["a", "b", "c"]]);
-        let s = &list(&conn, "D").unwrap()[0];
+        let s = &list(&conn).unwrap()[0];
         assert_eq!(s.cards.iter().find(|c| c.id == s.best).unwrap().file_name, "b");
-        let names: Vec<String> = deck::window(&conn, "D", 0, 10, "all").unwrap().into_iter().map(|c| c.file_name).collect();
+        let names: Vec<String> = deck::window(&conn, 0, 10, "all").unwrap().into_iter().map(|c| c.file_name).collect();
         assert_eq!(names, vec!["a", "d", "e", "f", "g"]);
     }
 
@@ -187,6 +201,7 @@ mod tests {
         let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
         let conn = Connection::open_in_memory().unwrap();
         db::init(&conn).unwrap();
+        db::open_deck(&conn, "D");
         let mut names: Vec<String> =
             std::fs::read_dir(dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         names.sort();
@@ -203,7 +218,7 @@ mod tests {
             )
             .unwrap();
         }
-        regroup(&conn, "D").unwrap();
+        regroup(&conn).unwrap();
         let mut got = series(&conn);
         got.iter_mut().for_each(|s| s.sort());
         let mut want: Vec<Vec<String>> = manifest["series"]
@@ -225,11 +240,11 @@ mod tests {
     fn file_dates_need_closer_match_and_split_sticks() {
         let mid = 0b1111_1111_1111u64;
         let conn = fixture(&[("a", 0, "file", 0), ("b", 1_000, "file", mid), ("c", 30_000, "exif", 0), ("d", 31_000, "exif", mid)]);
-        regroup(&conn, "D").unwrap();
+        regroup(&conn).unwrap();
         assert_eq!(series(&conn), vec![vec!["c", "d"]]);
-        let id = list(&conn, "D").unwrap()[0].id;
+        let id = list(&conn).unwrap()[0].id;
         assert_eq!(split(&conn, id).unwrap().len(), 2);
-        regroup(&conn, "D").unwrap();
+        regroup(&conn).unwrap();
         assert!(series(&conn).is_empty());
     }
 }

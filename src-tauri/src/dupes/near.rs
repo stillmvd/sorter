@@ -236,7 +236,7 @@ pub fn rates(conn: &Connection) -> rusqlite::Result<(i64, i64)> {
 type Key = (Scope, Option<String>, Option<String>);
 
 fn key(conn: &Connection) -> rusqlite::Result<Key> {
-    Ok((Scope::work(conn)?, crate::db::get_setting(conn, "deck_path")?, crate::db::get_setting(conn, "table_path")?))
+    Ok((Scope::work(conn)?, Some(crate::deck::open_roots(conn)?.join("|")), crate::db::get_setting(conn, "table_path")?))
 }
 
 type Done = (u64, FileInfo, Option<Print>);
@@ -612,7 +612,7 @@ mod probe {
         std::fs::create_dir_all(&dir).unwrap();
         let conn = Connection::open(dir.join("db.sqlite")).unwrap();
         crate::db::init(&conn).unwrap();
-        crate::db::set_setting(&conn, "deck_path", deck).unwrap();
+        crate::db::open_deck(&conn, deck);
         crate::db::set_setting(&conn, "table_path", table).unwrap();
         crate::db::set_setting(&conn, "dupes_enabled", "1").unwrap();
         crate::db::set_setting(&conn, "dupes_scope", "all").unwrap();
@@ -741,7 +741,7 @@ mod probe {
         std::fs::create_dir_all(&dir).unwrap();
         let conn = Connection::open(dir.join("db.sqlite")).unwrap();
         crate::db::init(&conn).unwrap();
-        crate::db::set_setting(&conn, "deck_path", deck).unwrap();
+        crate::db::open_deck(&conn, deck);
         crate::db::set_setting(&conn, "table_path", table).unwrap();
         crate::db::set_setting(&conn, "dupes_enabled", "1").unwrap();
         crate::db::set_setting(&conn, "dupes_scope", "all").unwrap();

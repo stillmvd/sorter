@@ -7,9 +7,11 @@ mod error;
 mod hints;
 mod media;
 mod moves;
+mod paths;
 mod photo;
 mod series;
 mod piles;
+mod review;
 mod playable;
 mod taskbar_icon;
 mod watch;
@@ -90,9 +92,16 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_state,
-            commands::choose_deck,
-            commands::cancel_deck,
-            commands::choose_table,
+            commands::home,
+            commands::add_roots,
+            commands::remove_root,
+            commands::set_draft_table,
+            commands::stop_reading,
+            commands::start_review,
+            commands::open_review,
+            commands::drop_review,
+            commands::close_review,
+            commands::recheck,
             commands::set_setting_cmd,
             commands::deck_window,
             commands::place,
@@ -122,6 +131,8 @@ pub fn run() {
             commands::split_series,
             commands::playable,
             commands::trash_copies,
+            commands::empty_dirs,
+            commands::trash_dirs,
             commands::replace_copy,
             commands::take_incoming,
         ])

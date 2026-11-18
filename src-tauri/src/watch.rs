@@ -3,6 +3,7 @@ use crate::deck::{self, CardView};
 use crate::piles;
 use notify_debouncer_full::notify::RecursiveMode;
 use notify_debouncer_full::{new_debouncer, DebounceEventResult};
+use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,18 +19,49 @@ struct DeckChanged {
     gone: Vec<i64>,
 }
 
+type Watched = (Vec<(String, bool)>, Option<String>);
+
+fn current(conn: &Connection) -> Watched {
+    let roots: Vec<(String, bool)> = conn
+        .prepare(
+            "SELECT path, online FROM review_root
+             WHERE review_id = (SELECT CAST(value AS INTEGER) FROM settings WHERE key = 'review_id') ORDER BY ord",
+        )
+        .and_then(|mut st| st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect())
+        .unwrap_or_default();
+    let table = if roots.is_empty() { None } else { db::get_setting(conn, "table_path").ok().flatten() };
+    (roots, table)
+}
+
+fn refresh_online(conn: &Connection, roots: &[(String, bool)]) -> bool {
+    let mut changed = false;
+    for (p, online) in roots {
+        let now = Path::new(p).is_dir();
+        if now != *online {
+            let _ = conn.execute("UPDATE review_root SET online = ?2 WHERE path = ?1", params![p, now]);
+            changed = true;
+        }
+    }
+    changed
+}
+
 pub fn spawn(app: AppHandle, db_path: PathBuf, wake: Arc<AtomicBool>) {
     std::thread::spawn(move || {
         let Ok(conn) = db::open(&db_path) else { return };
         let (tx, rx) = mpsc::channel::<()>();
         let _ = tx.send(());
-        let mut watched: (Option<String>, Option<String>) = (None, None);
+        let mut watched: Watched = (Vec::new(), None);
         let mut _debouncer = None;
         let mut retry = false;
+        let stop = AtomicBool::new(false);
         loop {
-            let deck_path = db::get_setting(&conn, "deck_path").ok().flatten();
-            let table_path = db::get_setting(&conn, "table_path").ok().flatten();
-            if (deck_path.clone(), table_path.clone()) != watched {
+            let mut now = current(&conn);
+            if refresh_online(&conn, &now.0) {
+                now = current(&conn);
+                let _ = app.emit("deck://roots", ());
+                wake.store(true, Ordering::Relaxed);
+            }
+            if now != watched {
                 let sender = tx.clone();
                 _debouncer = new_debouncer(Duration::from_millis(1500), None, move |r: DebounceEventResult| {
                     if r.is_ok() {
@@ -38,12 +70,17 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, wake: Arc<AtomicBool>) {
                 })
                 .ok()
                 .map(|mut d| {
-                    for p in [&deck_path, &table_path].into_iter().flatten() {
-                        let _ = d.watch(Path::new(p), RecursiveMode::NonRecursive);
+                    for (p, online) in &now.0 {
+                        if *online {
+                            let _ = d.watch(Path::new(p), RecursiveMode::Recursive);
+                        }
+                    }
+                    if let Some(t) = &now.1 {
+                        let _ = d.watch(Path::new(t), RecursiveMode::NonRecursive);
                     }
                     d
                 });
-                watched = (deck_path.clone(), table_path.clone());
+                watched = now.clone();
                 retry = true;
             }
             let timeout = if retry { Duration::from_secs(3) } else { Duration::from_secs(2) };
@@ -53,31 +90,33 @@ pub fn spawn(app: AppHandle, db_path: PathBuf, wake: Arc<AtomicBool>) {
                 continue;
             }
             retry = false;
-            let now = (
-                db::get_setting(&conn, "deck_path").ok().flatten(),
-                db::get_setting(&conn, "table_path").ok().flatten(),
-            );
-            if now != watched {
+            if current(&conn) != watched {
                 retry = true;
                 continue;
             }
-            if let Some(d) = &deck_path
-                && let Ok(r) = deck::sync(&conn, d) {
-                    retry = r.pending;
-                    if !r.added.is_empty() || !r.gone.is_empty() {
-                        let added = deck::cards(&conn, &r.added).unwrap_or_default();
-                        let _ = app.emit("deck://changed", DeckChanged { added, gone: r.gone });
-                        wake.store(true, Ordering::Relaxed);
-                        if crate::series::regroup(&conn, d).unwrap_or(false) {
-                            let _ = app.emit("deck://series", ());
-                        }
-                    }
+            let mut added = Vec::new();
+            let mut gone = Vec::new();
+            for (root, _) in watched.0.iter().filter(|(_, online)| *online) {
+                if let Ok(r) = deck::sync_seen(&conn, root, &stop, &mut |_| {}) {
+                    retry |= r.pending;
+                    added.extend(r.added);
+                    gone.extend(r.gone);
                 }
-            if let Some(t) = &table_path
+            }
+            if !added.is_empty() || !gone.is_empty() {
+                let added = deck::cards(&conn, &added).unwrap_or_default();
+                let _ = app.emit("deck://changed", DeckChanged { added, gone });
+                wake.store(true, Ordering::Relaxed);
+                if crate::series::regroup(&conn).unwrap_or(false) {
+                    let _ = app.emit("deck://series", ());
+                }
+            }
+            if let Some(t) = &watched.1
                 && piles::sync(&conn, t).is_ok()
-                    && let Ok(list) = piles::list(&conn, t) {
-                        let _ = app.emit("piles://changed", list);
-                    }
+                && let Ok(list) = piles::list(&conn, t)
+            {
+                let _ = app.emit("piles://changed", list);
+            }
         }
     });
 }

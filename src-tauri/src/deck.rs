@@ -4,6 +4,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const VIDEO_EXT: [&str; 6] = ["mp4", "mov", "mkv", "webm", "avi", "m4v"];
 pub const PHOTO_EXT: [&str; 5] = ["jpg", "jpeg", "png", "webp", "gif"];
@@ -14,6 +15,7 @@ pub struct CardView {
     pub id: i64,
     pub file_name: String,
     pub path: String,
+    pub origin: String,
     pub size: i64,
     pub taken_at: Option<i64>,
     pub duration_ms: Option<i64>,
@@ -39,7 +41,8 @@ pub fn card_from_row(r: &Row) -> rusqlite::Result<CardView> {
     Ok(CardView {
         id: r.get(0)?,
         path: Path::new(&deck).join(&name).to_string_lossy().into_owned(),
-        file_name: name,
+        origin: crate::paths::origin(&deck, &name),
+        file_name: Path::new(&name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(name),
         size: r.get(3)?,
         taken_at: r.get(4)?,
         duration_ms: r.get(5)?,
@@ -115,7 +118,7 @@ pub fn taken_from_name(name: &str) -> Option<i64> {
     None
 }
 
-fn mtime_ms(meta: &fs::Metadata) -> i64 {
+pub fn mtime_ms(meta: &fs::Metadata) -> i64 {
     meta.modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -140,21 +143,33 @@ fn ready(_: &Path) -> bool {
     true
 }
 
+#[cfg(test)]
 pub fn sync(conn: &Connection, deck: &str) -> AppResult<SyncResult> {
-    sync_seen(conn, deck, &mut |_| {})
+    let stop = AtomicBool::new(false);
+    sync_seen(conn, deck, &stop, &mut |_| {})
 }
 
-pub fn sync_seen(conn: &Connection, deck: &str, seen: &mut dyn FnMut(usize)) -> AppResult<SyncResult> {
+pub fn skip_dirs(conn: &Connection, root: &str) -> Vec<String> {
+    let own: Option<Option<String>> = conn
+        .query_row(
+            "SELECT r.table_path FROM review r JOIN review_root rr ON rr.review_id = r.id WHERE rr.path = ?1 COLLATE NOCASE",
+            params![root],
+            |r| r.get(0),
+        )
+        .ok();
+    match own {
+        Some(t) => t.into_iter().collect(),
+        None => crate::db::get_setting(conn, "table_path").ok().flatten().into_iter().collect(),
+    }
+}
+
+pub fn sync_seen(conn: &Connection, deck: &str, stop: &AtomicBool, seen: &mut dyn FnMut(usize)) -> AppResult<SyncResult> {
     let dir = Path::new(deck);
-    let mut files: Vec<(String, i64, i64)> = fs::read_dir(dir)
-        .map_err(|e| io_error(&e, dir))?
-        .filter_map(|e| e.ok())
-        .filter(|e| is_media(&e.path()))
-        .filter_map(|e| {
-            let meta = e.metadata().ok()?;
-            Some((e.file_name().to_string_lossy().into_owned(), meta.len() as i64, mtime_ms(&meta)))
-        })
-        .collect();
+    let skip = skip_dirs(conn, deck);
+    let mut files = crate::paths::walk(deck, &skip, stop, seen).map_err(|e| io_error(&e, dir))?;
+    if stop.load(Ordering::Relaxed) {
+        return Err(io_error(&std::io::Error::new(std::io::ErrorKind::Interrupted, "stopped"), dir));
+    }
     files.sort_by_key(|f| f.0.to_lowercase());
 
     let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
@@ -180,14 +195,18 @@ pub fn sync_seen(conn: &Connection, deck: &str, seen: &mut dyn FnMut(usize)) -> 
     let present: HashMap<String, ()> = files.iter().map(|f| (f.0.to_lowercase(), ())).collect();
     let mut gone = Vec::new();
     for (name, (id, _, _)) in &rows {
-        if !present.contains_key(name) && !busy_cards.contains(id) && !dir.join(name).exists() {
+        let full = dir.join(name);
+        let skipped = skip.iter().any(|s| crate::paths::is_inside(&full.to_string_lossy(), s));
+        if !present.contains_key(name) && !busy_cards.contains(id) && (skipped || !full.exists()) {
             tx.execute("UPDATE card SET status = 'gone' WHERE id = ?1", params![id])?;
             gone.push(*id);
         }
     }
 
     let mut position: f64 = tx.query_row(
-        "SELECT COALESCE(MAX(position), 0) FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred')",
+        "SELECT COALESCE(MAX(position), 0) FROM card WHERE status IN ('in_deck','deferred')
+           AND (deck_path = ?1 OR deck_path IN (SELECT path FROM review_root
+             WHERE review_id = (SELECT review_id FROM review_root WHERE path = ?1 COLLATE NOCASE)))",
         params![deck],
         |r| r.get(0),
     )?;
@@ -196,11 +215,7 @@ pub fn sync_seen(conn: &Connection, deck: &str, seen: &mut dyn FnMut(usize)) -> 
     )?;
     let mut added = Vec::new();
     let mut pending = false;
-    let total = files.len();
-    for (i, (name, size, mtime)) in files.into_iter().enumerate() {
-        if i % 50 == 0 {
-            seen(i);
-        }
+    for (name, size, mtime) in files {
         match rows.get(&name.to_lowercase()) {
             Some((id, s, m)) if (*s, *m) != (size, mtime) => {
                 tx.execute(
@@ -241,19 +256,31 @@ pub fn sync_seen(conn: &Connection, deck: &str, seen: &mut dyn FnMut(usize)) -> 
     }
     drop(insert);
     tx.commit()?;
-    seen(total);
     Ok(SyncResult { added, gone, pending })
 }
 
-pub fn window(conn: &Connection, deck: &str, from: i64, count: i64, kind: &str) -> AppResult<Vec<CardView>> {
+pub const IN_OPEN: &str = "deck_path IN (SELECT path FROM open_root)";
+
+pub fn open_roots(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    conn.prepare("SELECT path FROM open_root")?.query_map([], |r| r.get(0))?.collect()
+}
+
+pub fn split_root<'a>(roots: &'a [String], path: &str) -> Option<(&'a str, String)> {
+    roots.iter().find(|r| crate::paths::is_inside(path, r)).map(|r| {
+        let base = r.trim_end_matches(std::path::MAIN_SEPARATOR).len();
+        (r.as_str(), path[base + 1..].to_string())
+    })
+}
+
+pub fn window(conn: &Connection, from: i64, count: i64, kind: &str) -> AppResult<Vec<CardView>> {
     let sql = format!(
-        "SELECT {CARD_COLUMNS} FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred')
-           AND (?4 = 'all' OR kind = ?4) AND (series_id IS NULL OR series_id = id)
-         ORDER BY position LIMIT ?2 OFFSET ?3"
+        "SELECT {CARD_COLUMNS} FROM card WHERE {IN_OPEN} AND status IN ('in_deck','deferred')
+           AND (?3 = 'all' OR kind = ?3) AND (series_id IS NULL OR series_id = id)
+         ORDER BY position LIMIT ?1 OFFSET ?2"
     );
     let cards = conn
         .prepare(&sql)?
-        .query_map(params![deck, count, from, kind], card_from_row)?
+        .query_map(params![count, from, kind], card_from_row)?
         .collect::<Result<_, _>>()?;
     Ok(cards)
 }
@@ -271,7 +298,8 @@ pub fn cards(conn: &Connection, ids: &[i64]) -> AppResult<Vec<CardView>> {
 pub fn defer(conn: &Connection, card_id: i64) -> AppResult<()> {
     conn.execute(
         "UPDATE card SET status = 'deferred', position =
-           (SELECT MAX(position) + 1 FROM card c WHERE c.deck_path = card.deck_path AND c.status IN ('in_deck','deferred'))
+           (SELECT MAX(position) + 1 FROM card c WHERE c.status IN ('in_deck','deferred')
+              AND (c.deck_path = card.deck_path OR c.deck_path IN (SELECT path FROM open_root)))
          WHERE id = ?1",
         params![card_id],
     )?;
@@ -284,12 +312,12 @@ pub struct KindCounts {
     pub placed: i64,
 }
 
-pub fn counts_by_kind(conn: &Connection, deck: &str) -> AppResult<(KindCounts, KindCounts)> {
+pub fn counts_by_kind(conn: &Connection) -> AppResult<(KindCounts, KindCounts)> {
     let mut out = (KindCounts::default(), KindCounts::default());
-    let mut st = conn.prepare(
-        "SELECT kind, SUM(status IN ('in_deck','deferred')), SUM(status = 'placed') FROM card WHERE deck_path = ?1 GROUP BY kind",
-    )?;
-    let rows = st.query_map(params![deck], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))?;
+    let mut st = conn.prepare(&format!(
+        "SELECT kind, SUM(status IN ('in_deck','deferred')), SUM(status = 'placed') FROM card WHERE {IN_OPEN} GROUP BY kind"
+    ))?;
+    let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))?;
     for row in rows {
         let (kind, left, placed) = row?;
         let slot = if kind == "photo" { &mut out.1 } else { &mut out.0 };
@@ -298,10 +326,10 @@ pub fn counts_by_kind(conn: &Connection, deck: &str) -> AppResult<(KindCounts, K
     Ok(out)
 }
 
-pub fn counts(conn: &Connection, deck: &str) -> AppResult<(i64, i64)> {
+pub fn counts(conn: &Connection) -> AppResult<(i64, i64)> {
     Ok(conn.query_row(
-        "SELECT SUM(status IN ('in_deck','deferred')), SUM(status = 'placed') FROM card WHERE deck_path = ?1",
-        params![deck],
+        &format!("SELECT SUM(status IN ('in_deck','deferred')), SUM(status = 'placed') FROM card WHERE {IN_OPEN}"),
+        [],
         |r| Ok((r.get::<_, Option<i64>>(0)?.unwrap_or(0), r.get::<_, Option<i64>>(1)?.unwrap_or(0))),
     )?)
 }
@@ -379,8 +407,8 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         db::init(&conn).unwrap();
         let mut seen = Vec::new();
-        sync_seen(&conn, &tmp.path().to_string_lossy(), &mut |n| seen.push(n)).unwrap();
-        assert_eq!(seen, vec![0, 50, 100, 120]);
+        sync_seen(&conn, &tmp.path().to_string_lossy(), &AtomicBool::new(false), &mut |n| seen.push(n)).unwrap();
+        assert_eq!(seen, vec![120]);
     }
 
     #[test]
@@ -424,28 +452,30 @@ mod tests {
         fs::write(tmp.path().join("sub/c.mp4"), b"c").unwrap();
         let conn = Connection::open_in_memory().unwrap();
         db::init(&conn).unwrap();
-        assert_eq!(sync(&conn, &deck).unwrap().added.len(), 3);
-        let w = window(&conn, &deck, 0, 10, "all").unwrap();
+        db::open_deck(&conn, &deck);
+        assert_eq!(sync(&conn, &deck).unwrap().added.len(), 4);
+        let w = window(&conn, 0, 10, "all").unwrap();
         assert_eq!(w[0].file_name, "a.MP4");
         assert_eq!((w[2].file_name.as_str(), w[2].kind.as_str()), ("c.JPG", "photo"));
-        assert_eq!(window(&conn, &deck, 0, 10, "photo").unwrap().len(), 1);
-        assert_eq!(window(&conn, &deck, 0, 10, "video").unwrap().len(), 2);
+        assert_eq!(window(&conn, 0, 10, "photo").unwrap().len(), 1);
+        assert_eq!(window(&conn, 0, 10, "video").unwrap().len(), 3);
         defer(&conn, w[0].id).unwrap();
-        assert_eq!(window(&conn, &deck, 0, 10, "all").unwrap()[0].file_name, "b.mp4");
+        assert_eq!(window(&conn, 0, 10, "all").unwrap()[0].file_name, "b.mp4");
         fs::remove_file(tmp.path().join("b.mp4")).unwrap();
         let r = sync(&conn, &deck).unwrap();
         assert_eq!(r.gone.len(), 1);
         assert!(r.added.is_empty());
-        assert_eq!(counts(&conn, &deck).unwrap(), (2, 0));
-        let (v, p) = counts_by_kind(&conn, &deck).unwrap();
-        assert_eq!((v.left, p.left), (1, 1));
+        assert_eq!(counts(&conn).unwrap(), (3, 0));
+        let (v, p) = counts_by_kind(&conn).unwrap();
+        assert_eq!((v.left, p.left), (2, 1));
         conn.execute(
             "UPDATE card SET series_id = (SELECT id FROM card WHERE file_name = 'a.MP4') WHERE file_name IN ('a.MP4', 'c.JPG')",
             [],
         )
         .unwrap();
-        let names: Vec<String> = window(&conn, &deck, 0, 10, "all").unwrap().into_iter().map(|c| c.file_name).collect();
-        assert_eq!(names, vec!["a.MP4".to_string()]);
+        let names: Vec<String> = window(&conn, 0, 10, "all").unwrap().into_iter().map(|c| c.file_name).collect();
+        assert_eq!(names, vec!["c.mp4".to_string(), "a.MP4".to_string()]);
+        assert_eq!(window(&conn, 0, 10, "all").unwrap()[0].origin, format!("{} › sub", crate::paths::name(&deck)));
         conn.execute("INSERT INTO pile(id, table_path, name, ord) VALUES (1, 'T', 'P', 0)", []).unwrap();
         conn.execute("INSERT INTO move(id, at, method, pile_id, state) VALUES (1, 0, 'key', 1, 'undoing')", []).unwrap();
         conn.execute(

@@ -158,23 +158,19 @@ pub fn path_set(files: &[FileInfo]) -> HashSet<String> {
 }
 
 pub(crate) fn deck_files(conn: &Connection) -> rusqlite::Result<Vec<FileInfo>> {
-    let deck = db::get_setting(conn, "deck_path")?.unwrap_or_default();
-    let mut out = Vec::new();
-    let names: Vec<String> = conn
-        .prepare("SELECT file_name FROM card WHERE deck_path = ?1 AND status IN ('in_deck','deferred') ORDER BY status = 'deferred', position")?
-        .query_map(params![deck], |r| r.get(0))?
-        .collect::<Result<_, _>>()?;
-    if !names.is_empty() {
-        let mut listed: HashMap<String, FileInfo> = fs::read_dir(&deck)
-            .map(|it| {
-                it.filter_map(|e| e.ok())
-                    .filter_map(|e| Some((e.file_name().to_string_lossy().to_lowercase(), entry_info(&e)?)))
-                    .collect()
-            })
-            .unwrap_or_default();
-        out.extend(names.iter().filter_map(|n| listed.remove(&n.to_lowercase())));
-    }
-    Ok(out)
+    conn.prepare(&format!(
+        "SELECT deck_path, file_name, size, mtime FROM card WHERE {} AND status IN ('in_deck','deferred')
+         ORDER BY status = 'deferred', position",
+        deck::IN_OPEN
+    ))?
+    .query_map([], |r| {
+        Ok(FileInfo {
+            path: Path::new(&r.get::<_, String>(0)?).join(r.get::<_, String>(1)?).to_string_lossy().into_owned(),
+            size: r.get(2)?,
+            mtime: r.get(3)?,
+        })
+    })?
+    .collect()
 }
 
 fn pile_files(conn: &Connection) -> rusqlite::Result<Vec<FileInfo>> {
@@ -324,15 +320,15 @@ struct Copy {
 type Found = (Copy, Option<i64>, Option<i64>, Option<i64>);
 type Row = (Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>, f64);
 
-fn copy_of(conn: &Connection, path: &str, deck: &str) -> rusqlite::Result<Found> {
+fn copy_of(conn: &Connection, path: &str, roots: &[String]) -> rusqlite::Result<Found> {
     let p = Path::new(path);
-    let in_deck = p.parent().map(|d| d.to_string_lossy().to_lowercase() == deck.to_lowercase()).unwrap_or(false);
-    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let row = if in_deck {
+    let found = deck::split_root(roots, path);
+    let in_deck = found.is_some();
+    let row = if let Some((root, rel)) = &found {
         conn.query_row(
             "SELECT id, width, height, duration_ms, taken_at, position FROM card
              WHERE deck_path = ?1 AND file_name = ?2 AND status IN ('in_deck','deferred')",
-            params![deck, name],
+            params![root, rel],
             |r| Ok((r.get::<_, i64>(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get::<_, Option<i64>>(4)?, r.get::<_, f64>(5)?)),
         )
         .optional()?
@@ -377,27 +373,23 @@ fn better(a: &Copy, b: &Copy) -> bool {
         .is_gt()
 }
 
-fn series_of(conn: &Connection, deck: &str, path: &str) -> Option<i64> {
-    let p = Path::new(path);
-    if p.parent().map(|d| d.to_string_lossy().to_lowercase()) != Some(deck.to_lowercase()) {
-        return None;
-    }
-    let name = p.file_name()?.to_string_lossy().into_owned();
+fn series_of(conn: &Connection, roots: &[String], path: &str) -> Option<i64> {
+    let (root, rel) = deck::split_root(roots, path)?;
     conn.query_row(
         "SELECT series_id FROM card WHERE deck_path = ?1 AND file_name = ?2 AND status IN ('in_deck','deferred')",
-        params![deck, name],
+        params![root, rel],
         |r| r.get::<_, Option<i64>>(0),
     )
     .ok()
     .flatten()
 }
 
-fn same_series(conn: &Connection, deck: &str, a: &str, b: &str) -> bool {
-    matches!((series_of(conn, deck, a), series_of(conn, deck, b)), (Some(x), Some(y)) if x == y)
+fn same_series(conn: &Connection, roots: &[String], a: &str, b: &str) -> bool {
+    matches!((series_of(conn, roots, a), series_of(conn, roots, b)), (Some(x), Some(y)) if x == y)
 }
 
 pub fn dupes_for(conn: &Connection, card_id: i64) -> AppResult<Vec<DupeView>> {
-    let deck = db::get_setting(conn, "deck_path")?.unwrap_or_default();
+    let deck = deck::open_roots(conn)?;
     let table = db::get_setting(conn, "table_path")?.unwrap_or_default();
     let Some(card) = deck::cards(conn, &[card_id])?.into_iter().next() else { return Ok(Vec::new()) };
     let scope = Scope::deck_only(conn)?;
@@ -481,7 +473,7 @@ mod tests {
         fs::write(table.join("Музыка").join("e.mp4"), b"same").unwrap();
         let conn = Connection::open_in_memory().unwrap();
         db::init(&conn).unwrap();
-        db::set_setting(&conn, "deck_path", &deck.to_string_lossy()).unwrap();
+        db::open_deck(&conn, &deck.to_string_lossy());
         db::set_setting(&conn, "table_path", &table.to_string_lossy()).unwrap();
         db::set_setting(&conn, "dupes_enabled", "1").unwrap();
         db::set_setting(&conn, "dupes_scope", "all").unwrap();
@@ -489,8 +481,8 @@ mod tests {
             .unwrap();
         for (i, n) in ["a.mp4", "b.mp4", "c.mp4", "d.mp4"].iter().enumerate() {
             conn.execute(
-                "INSERT INTO card(deck_path, file_name, size, mtime, position, taken_at) VALUES (?1, ?2, 4, 0, ?3, ?3)",
-                params![deck.to_string_lossy(), n, i as f64],
+                "INSERT INTO card(deck_path, file_name, size, mtime, position, taken_at) VALUES (?1, ?2, ?4, 0, ?3, ?3)",
+                params![deck.to_string_lossy(), n, i as f64, fs::metadata(deck.join(n)).unwrap().len() as i64],
             )
             .unwrap();
         }
@@ -535,7 +527,7 @@ mod tests {
         fs::write(table.join("Музыка").join(".thumbs").join("x.mp4"), b"same").unwrap();
         let conn = Connection::open_in_memory().unwrap();
         db::init(&conn).unwrap();
-        db::set_setting(&conn, "deck_path", &deck.to_string_lossy()).unwrap();
+        db::open_deck(&conn, &deck.to_string_lossy());
         db::set_setting(&conn, "table_path", &table.to_string_lossy()).unwrap();
         db::set_setting(&conn, "dupes_enabled", "1").unwrap();
         db::set_setting(&conn, "dupes_scope", "all").unwrap();
@@ -570,7 +562,7 @@ mod tests {
         fs::write(table.join("Мемы").join("e.mp4"), b"same").unwrap();
         let conn = Connection::open_in_memory().unwrap();
         db::init(&conn).unwrap();
-        db::set_setting(&conn, "deck_path", &deck.to_string_lossy()).unwrap();
+        db::open_deck(&conn, &deck.to_string_lossy());
         db::set_setting(&conn, "table_path", &table.to_string_lossy()).unwrap();
         conn.execute("INSERT INTO pile(table_path, name, ord) VALUES (?1, 'Мемы', 0)", params![table.to_string_lossy()]).unwrap();
         for (i, n) in ["a.mp4", "b.mp4"].iter().enumerate() {
@@ -677,7 +669,7 @@ pub struct Groups {
 const GROUP_MIN: i64 = 50;
 
 pub fn groups(conn: &Connection) -> AppResult<Groups> {
-    let deck = db::get_setting(conn, "deck_path")?.unwrap_or_default();
+    let deck = deck::open_roots(conn)?;
     let table = db::get_setting(conn, "table_path")?.unwrap_or_default();
     let scope = Scope::current(conn)?;
     let all = scope_files(conn, &scope)?;
