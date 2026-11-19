@@ -102,20 +102,20 @@ pub fn free_name(dir: &Path, name: &str, taken: &[String]) -> String {
 pub fn validate_pile_name(name: &str) -> AppResult<String> {
     let n = name.trim();
     if n.is_empty() {
-        return Err(AppError::new("BAD_NAME", "Название стопки не может быть пустым."));
+        return Err(AppError::new("BAD_NAME", "Назови стопку"));
     }
     if n.chars().any(|c| "<>:\"/\\|?*".contains(c) || (c as u32) < 32) {
         return Err(AppError::new("BAD_NAME", "В названии нельзя использовать символы < > : \" / \\ | ? *"));
     }
     if n.ends_with('.') {
-        return Err(AppError::new("BAD_NAME", "Название не может заканчиваться точкой."));
+        return Err(AppError::new("BAD_NAME", "Убери точку в конце названия"));
     }
     if n.chars().count() > 120 {
-        return Err(AppError::new("BAD_NAME", "Название слишком длинное — оставь до 120 символов."));
+        return Err(AppError::new("BAD_NAME", "Название слишком длинное — оставь до 120 символов"));
     }
     let stem = n.split('.').next().unwrap_or(n).to_uppercase();
     if RESERVED.contains(&stem.as_str()) {
-        return Err(AppError::new("BAD_NAME", format!("Имя «{n}» зарезервировано Windows — выбери другое.")));
+        return Err(AppError::new("BAD_NAME", format!("Имя «{n}» зарезервировано Windows — выбери другое")));
     }
     Ok(n.to_string())
 }
@@ -162,7 +162,7 @@ fn trash_restore(from: &Path) -> AppResult<()> {
     if from.exists() {
         return Err(AppError::new(
             "FILE_IN_THE_WAY",
-            format!("На месте «{}» уже лежит другой файл — убери его и попробуй снова.", file_label(from)),
+            format!("На месте «{}» уже лежит другой файл — убери его и попробуй снова", file_label(from)),
         ));
     }
     let items = trash::os_limited::list().map_err(|e| AppError::new("TRASH", format!("Корзина Windows сейчас недоступна ({e}). Попробуй ещё раз или верни файл из корзины вручную.")))?;
@@ -175,7 +175,7 @@ fn trash_restore(from: &Path) -> AppResult<()> {
             .map_err(|e| AppError::new("TRASH", format!("Не получилось вернуть «{}» из корзины ({e}). Открой корзину Windows и восстанови файл вручную.", file_label(from)))),
         None => Err(AppError::new(
             "FILE_NOT_THERE",
-            format!("«{}» нет в корзине — возможно, корзину очистили.", file_label(from)),
+            format!("«{}» нет в корзине — возможно, корзину очистили", file_label(from)),
         )),
     }
 }
@@ -299,7 +299,7 @@ fn move_into(
     rename: RenameFn,
 ) -> AppResult<MoveView> {
     if card_ids.is_empty() && paths.is_empty() {
-        return Err(AppError::new("NOTHING", "Нечего раскладывать — отметь хотя бы одну карту."));
+        return Err(AppError::new("NOTHING", "Отметь хотя бы одну карту"));
     }
     let pile = load_pile(conn, pile_id)?;
     if !pile.is_trash && !pile.exists {
@@ -335,7 +335,7 @@ fn move_into(
     }
     for path in paths {
         if !path.is_file() && !(pile.is_trash && method == "dirs" && path.is_dir()) {
-            return Err(AppError::new("FILE_NOT_THERE", format!("Файла «{}» уже нет на месте.", file_label(path))));
+            return Err(AppError::new("FILE_NOT_THERE", format!("Файла «{}» уже нет на месте", file_label(path))));
         }
         let to = if pile.is_trash {
             None
@@ -431,7 +431,7 @@ fn trash_pile(conn: &Connection) -> AppResult<i64> {
 fn trash_of(conn: &Connection, table: &str) -> AppResult<i64> {
     conn.query_row("SELECT id FROM pile WHERE table_path = ?1 AND is_trash = 1", params![table], |r| r.get(0))
         .optional()?
-        .ok_or_else(|| AppError::new("PILE_GONE", "Корзины нет — открой стол заново."))
+        .ok_or_else(|| AppError::new("PILE_GONE", "Корзины нет — открой стол заново"))
 }
 
 fn deck_card(conn: &Connection, path: &Path) -> AppResult<Option<i64>> {
@@ -479,7 +479,7 @@ pub fn replace_copy(conn: &mut Connection, card_id: i64, worse: &Path) -> AppRes
 
 pub fn replace_copy_with(conn: &mut Connection, card_id: i64, worse: &Path, rename: RenameFn) -> AppResult<Vec<MoveView>> {
     let table = table_path(conn)?;
-    let not_in_pile = || AppError::new("PILE_GONE", format!("«{}» лежит не в стопке — заменять нечего.", file_label(worse)));
+    let not_in_pile = || AppError::new("PILE_GONE", format!("«{}» лежит не в стопке — заменять нечего", file_label(worse)));
     let (name, _) = crate::dupes::pile_place(worse, &table).ok_or_else(not_in_pile)?;
     let sub = worse.parent().and_then(|d| d.strip_prefix(Path::new(&table).join(&name)).ok()).map(Path::to_path_buf).unwrap_or_default();
     let pile: i64 = conn
@@ -512,7 +512,7 @@ pub fn place_series_with(
     rename: RenameFn,
 ) -> AppResult<MoveView> {
     if members.is_empty() {
-        return Err(AppError::new("NO_CARD", "Этой серии уже нет в колоде — колода обновится сама."));
+        return Err(AppError::new("NO_CARD", "Этой серии уже нет в колоде — колода обновится сама"));
     }
     let chosen: Vec<i64> = if keep.is_empty() { members.to_vec() } else { members.iter().copied().filter(|id| keep.contains(id)).collect() };
     let rest: Vec<i64> = members.iter().copied().filter(|id| !chosen.contains(id)).collect();
@@ -583,7 +583,7 @@ pub fn undo(conn: &Connection, move_id: i64) -> AppResult<MoveView> {
 pub fn undo_with(conn: &Connection, move_id: i64, rename: RenameFn) -> AppResult<MoveView> {
     let state: String = conn.query_row("SELECT state FROM move WHERE id = ?1", params![move_id], |r| r.get(0))?;
     if state != "done" && state != "undoing" {
-        return Err(AppError::new("NOT_UNDOABLE", "Этот ход уже забран или не состоялся."));
+        return Err(AppError::new("NOT_UNDOABLE", "Этот ход уже забран или не состоялся"));
     }
     let items = load_items(conn, move_id)?;
     if state == "done" {
@@ -592,13 +592,13 @@ pub fn undo_with(conn: &Connection, move_id: i64, rename: RenameFn) -> AppResult
                 && !to.exists() {
                     return Err(AppError::new(
                         "FILE_NOT_THERE",
-                        format!("Файла «{}» нет в стопке — его переместили или удалили, забрать ход нельзя.", file_label(to)),
+                        format!("Файла «{}» нет в стопке — его переместили или удалили, забрать ход нельзя", file_label(to)),
                     ));
                 }
             if it.from.exists() {
                 return Err(AppError::new(
                     "FILE_IN_THE_WAY",
-                    format!("В колоде уже лежит файл «{}» — убери его и попробуй снова.", file_label(&it.from)),
+                    format!("В колоде уже лежит файл «{}» — убери его и попробуй снова", file_label(&it.from)),
                 ));
             }
         }

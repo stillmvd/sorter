@@ -280,7 +280,7 @@ pub fn recheck(state: State<AppState>) -> AppResult<review::Home> {
 #[tauri::command]
 pub fn set_setting_cmd(app: tauri::AppHandle, state: State<AppState>, key: String, value: String) -> AppResult<()> {
     if !USER_KEYS.contains(&key.as_str()) {
-        return Err(AppError::new("BAD_SETTING", "Такой настройки нет."));
+        return Err(AppError::new("BAD_SETTING", "Такой настройки нет"));
     }
     let conn = state.conn();
     match key.as_str() {
@@ -288,7 +288,7 @@ pub fn set_setting_cmd(app: tauri::AppHandle, state: State<AppState>, key: Strin
             conn.execute("DELETE FROM settings WHERE key = 'dupes_enabled'", [])?;
         }
         "dupes_scope" if value != "deck" && value != "all" => {
-            return Err(AppError::new("BAD_SETTING", "Такой области поиска нет."));
+            return Err(AppError::new("BAD_SETTING", "Такой области поиска нет"));
         }
         _ => set_setting(&conn, &key, &value)?,
     }
@@ -632,7 +632,7 @@ pub fn search_preview(state: State<AppState>, piles: Vec<String>, deck: bool, fo
 pub fn search_start(app: AppHandle, state: State<AppState>, piles: Vec<String>, deck: bool, folders: Vec<String>) -> AppResult<()> {
     let spec = search_spec(piles, deck, folders);
     if spec.is_empty() {
-        return Err(AppError::new("EMPTY_SEARCH", "Отметь хотя бы одну стопку, колоду или папку."));
+        return Err(AppError::new("EMPTY_SEARCH", "Отметь хотя бы одну стопку, колоду или папку"));
     }
     dupes::search::start(&state.conn(), spec)?;
     state.wake.store(true, Ordering::Relaxed);

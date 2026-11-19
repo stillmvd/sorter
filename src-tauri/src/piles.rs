@@ -117,11 +117,11 @@ pub fn list(conn: &Connection, table: &str) -> AppResult<Vec<PileView>> {
 pub fn create(conn: &Connection, table: &str, name: &str) -> AppResult<i64> {
     let name = validate_pile_name(name)?;
     if name.to_lowercase() == "корзина" {
-        return Err(AppError::new("BAD_NAME", "Имя «Корзина» занято встроенной стопкой — выбери другое."));
+        return Err(AppError::new("BAD_NAME", "Имя «Корзина» занято встроенной стопкой — выбери другое"));
     }
     let dir = Path::new(table).join(&name);
     if dir.exists() {
-        return Err(AppError::new("EXISTS", format!("Стопка «{name}» уже есть.")));
+        return Err(AppError::new("EXISTS", format!("Стопка «{name}» уже есть")));
     }
     fs::create_dir(&dir).map_err(|e| io_error(&e, &dir))?;
     sync(conn, table)?;
@@ -148,7 +148,7 @@ pub fn rename(conn: &Connection, pile_id: i64, name: &str) -> AppResult<()> {
         .optional()?
         .ok_or_else(|| AppError::new("PILE_GONE", "Этой стопки больше нет — её папку убрали со стола. Выбери другую стопку или создай её заново."))?;
     if is_trash {
-        return Err(AppError::new("BAD_NAME", "Корзину переименовать нельзя."));
+        return Err(AppError::new("BAD_NAME", "Корзину переименовать нельзя"));
     }
     if old == name {
         return Ok(());
@@ -156,7 +156,7 @@ pub fn rename(conn: &Connection, pile_id: i64, name: &str) -> AppResult<()> {
     let from = Path::new(&table).join(&old);
     let to = Path::new(&table).join(&name);
     if !old.eq_ignore_ascii_case(&name) && to.exists() {
-        return Err(AppError::new("EXISTS", format!("Стопка «{name}» уже есть.")));
+        return Err(AppError::new("EXISTS", format!("Стопка «{name}» уже есть")));
     }
     safe_rename(&from, &to).map_err(|e| io_error(&e, &from))?;
     let old_prefix = format!("{}\\", from.to_string_lossy());
@@ -176,7 +176,7 @@ pub fn remove(conn: &Connection, pile_id: i64) -> AppResult<()> {
         .optional()?
         .ok_or_else(|| AppError::new("PILE_GONE", "Этой стопки больше нет — её папку убрали со стола. Выбери другую стопку или создай её заново."))?;
     if is_trash {
-        return Err(AppError::new("BAD_NAME", "Корзину удалить нельзя."));
+        return Err(AppError::new("BAD_NAME", "Корзину удалить нельзя"));
     }
     let dir = Path::new(&table).join(&name);
     let has_files = fs::read_dir(&dir).map(|mut it| it.next().is_some()).unwrap_or(false);
@@ -201,7 +201,7 @@ pub fn set_key(conn: &Connection, pile_id: i64, key: Option<&str>) -> AppResult<
     )?;
     if let Some(k) = key {
         if !KEYS.contains(&k) {
-            return Err(AppError::new("BAD_KEY", "Эту клавишу нельзя назначить — подойдут 1–9 и Q–P."));
+            return Err(AppError::new("BAD_KEY", "Эту клавишу нельзя назначить — подойдут 1–9 и Q–P"));
         }
         conn.execute(
             "UPDATE pile SET key = NULL WHERE table_path = ?1 AND key = ?2",
