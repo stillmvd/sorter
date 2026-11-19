@@ -57,7 +57,7 @@
 
 - [x] T019 `pnpm run check`, `pnpm build`
 - [x] T020 CDP-прогон [quickstart.md](quickstart.md) на dev, скриншот главного экрана
-- [ ] T021 ru-editor на новые строки, `/adversary`, коммиты по фазам `feat: …`
+- [x] T021 ru-editor на новые строки, `/adversary`, коммиты по фазам `feat: …`
 
 ## Dependencies
 
