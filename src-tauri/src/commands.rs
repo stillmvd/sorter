@@ -225,6 +225,44 @@ pub fn drop_review(state: State<AppState>, id: i64) -> AppResult<()> {
 }
 
 #[tauri::command]
+pub fn restore_review(state: State<AppState>, id: i64) -> AppResult<()> {
+    review::restore_review(&state.conn(), id)
+}
+
+#[tauri::command]
+pub fn tidy_review(state: State<AppState>, id: i64) -> AppResult<usize> {
+    let mut conn = state.conn();
+    let found = review::empty_dirs(&conn, id)?;
+    let dirs = match review::check_empty(&conn, id, &found) {
+        Err(e) if e.code == "NOTHING" => Vec::new(),
+        other => other?,
+    };
+    let n = if dirs.is_empty() {
+        0
+    } else {
+        let table = review::table_path_of(&conn, id)?;
+        piles::sync(&conn, &table)?;
+        moves::trash_dirs_in(&mut conn, &table, &dirs)?;
+        dirs.len()
+    };
+    review::keep_dirs(&conn, id)?;
+    Ok(n)
+}
+
+#[tauri::command]
+pub fn keep_dirs(state: State<AppState>, id: i64) -> AppResult<()> {
+    review::keep_dirs(&state.conn(), id)
+}
+
+#[tauri::command(async)]
+pub fn relocate_root(state: State<AppState>, id: i64, old: String, path: String) -> AppResult<review::Home> {
+    let conn = crate::db::open(&state.db_path)?;
+    review::relocate(&conn, id, &old, &path)?;
+    state.wake.store(true, Ordering::Relaxed);
+    review::home(&conn)
+}
+
+#[tauri::command]
 pub fn close_review(state: State<AppState>) -> AppResult<()> {
     review::close(&state.conn())?;
     state.wake.store(true, Ordering::Relaxed);

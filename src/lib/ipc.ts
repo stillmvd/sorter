@@ -181,7 +181,9 @@ export type TableView = { path: string; name: string; piles: number; online: boo
 
 export type RootError = { path: string; code: string; message: string; reviewId: number | null };
 
-export type Draft = { roots: RootView[]; table: TableView | null; errors: RootError[] };
+export type Merged = { path: string; name: string; reviewId: number; label: string };
+
+export type Draft = { roots: RootView[]; table: TableView | null; errors: RootError[]; merged: Merged[] };
 
 export type ReviewView = {
   id: number;
@@ -194,9 +196,10 @@ export type ReviewView = {
   next: Card | null;
   online: boolean;
   gone: string | null;
+  empty: number;
 };
 
-export type Home = { draft: Draft; reviews: ReviewView[]; last: number | null };
+export type Home = { draft: Draft; reviews: ReviewView[]; tidy: ReviewView[]; last: number | null };
 
 export type AppError = { code: string; message: string };
 
@@ -240,6 +243,10 @@ export const ipc = {
   startReview: () => invoke<ReviewView>("start_review"),
   openReview: (id: number) => invoke<ReviewView>("open_review", { id }),
   dropReview: (id: number) => invoke<void>("drop_review", { id }),
+  restoreReview: (id: number) => invoke<void>("restore_review", { id }),
+  keepDirs: (id: number) => invoke<void>("keep_dirs", { id }),
+  tidyReview: (id: number) => invoke<number>("tidy_review", { id }),
+  relocateRoot: (id: number, old: string, path: string) => invoke<Home>("relocate_root", { id, old, path }),
   closeReview: () => invoke<void>("close_review"),
   recheck: () => invoke<Home>("recheck"),
   setSetting: (key: string, value: string) => invoke<void>("set_setting_cmd", { key, value }),

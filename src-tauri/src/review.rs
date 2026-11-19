@@ -50,6 +50,7 @@ pub struct Draft {
     pub roots: Vec<RootView>,
     pub table: Option<TableView>,
     pub errors: Vec<RootError>,
+    pub merged: Vec<Merged>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -65,6 +66,16 @@ pub struct ReviewView {
     pub next: Option<CardView>,
     pub online: bool,
     pub gone: Option<String>,
+    pub empty: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Merged {
+    pub path: String,
+    pub name: String,
+    pub review_id: i64,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -72,6 +83,7 @@ pub struct ReviewView {
 pub struct Home {
     pub draft: Draft,
     pub reviews: Vec<ReviewView>,
+    pub tidy: Vec<ReviewView>,
     pub last: Option<i64>,
 }
 
@@ -123,7 +135,7 @@ pub fn draft(conn: &Connection) -> AppResult<Draft> {
         Some(t) => Some(table_view(conn, &t)?),
         None => None,
     };
-    Ok(Draft { roots, table, errors: Vec::new() })
+    Ok(Draft { roots, table, errors: Vec::new(), merged: Vec::new() })
 }
 
 pub fn label(conn: &Connection, review: i64) -> rusqlite::Result<String> {
@@ -204,7 +216,7 @@ fn split_out(conn: &Connection, outer: &str, inner: &str) -> rusqlite::Result<()
 }
 
 pub enum Check {
-    Add,
+    Add(i64),
     Skip,
     Fail(RootError),
 }
@@ -233,6 +245,7 @@ pub fn check_root(conn: &Connection, draft: i64, path: &str) -> AppResult<Check>
         }
         conn.execute("DELETE FROM review_root WHERE path = ?1 COLLATE NOCASE", params![path])?;
     }
+    let mut target = draft;
     for (root, review, started) in all_roots(conn)? {
         if paths::is_inside(path, &root) {
             if review == draft {
@@ -243,7 +256,18 @@ pub fn check_root(conn: &Connection, draft: i64, path: &str) -> AppResult<Check>
             }
             split_out(conn, &root, path)?;
         } else if paths::is_inside(&root, path) && started && review != draft && unfinished(conn, review)? {
-            return Ok(Check::Fail(busy_error(conn, path, review)?));
+            if target != draft && target != review {
+                return Ok(Check::Fail(err(path, "TWO_REVIEWS", "Внутри папки из двух начатых разборов — закончи один из них".into(), Some(review))));
+            }
+            target = review;
+        }
+    }
+    if target != draft {
+        let t: Option<String> = conn.query_row("SELECT table_path FROM review WHERE id = ?1", params![target], |r| r.get(0))?;
+        if let Some(t) = &t
+            && (paths::same(t, path) || paths::is_inside(path, t))
+        {
+            return Ok(Check::Fail(err(path, "INSIDE_TABLE", "Это стол или папка в нём — выбери другую папку для разбора".into(), None)));
         }
     }
     for (root, _, _) in all_roots(conn)? {
@@ -251,22 +275,24 @@ pub fn check_root(conn: &Connection, draft: i64, path: &str) -> AppResult<Check>
             rekey_into(conn, &root, path)?;
         }
     }
-    Ok(Check::Add)
+    Ok(Check::Add(target))
 }
 
 pub fn add_roots(conn: &Connection, input: &[String], seen: &mut dyn FnMut(&str, usize)) -> AppResult<Draft> {
     let _one = ADDING.lock().unwrap_or_else(|e| e.into_inner());
     STOP.store(false, Ordering::Relaxed);
+    purge_hidden(conn, None)?;
     let id = draft_id(conn)?;
     let mut errors = Vec::new();
+    let mut merged = Vec::new();
     for raw in input {
         let path = paths::canon(raw);
         let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
         let check = check_root(&tx, id, &path)?;
-        if matches!(check, Check::Add) {
+        if let Check::Add(target) = check {
             tx.execute(
                 "INSERT INTO review_root(review_id, path, ord) VALUES (?1, ?2, (SELECT COALESCE(MAX(ord), 0) + 1 FROM review_root WHERE review_id = ?1))",
-                params![id, path],
+                params![target, path],
             )?;
         }
         if matches!(check, Check::Fail(_)) {
@@ -277,7 +303,7 @@ pub fn add_roots(conn: &Connection, input: &[String], seen: &mut dyn FnMut(&str,
         match check {
             Check::Fail(e) => errors.push(e),
             Check::Skip => {}
-            Check::Add => {
+            Check::Add(target) => {
                 if let Ok(mut r) = READING.lock() {
                     *r = Some((path.clone(), 0));
                 }
@@ -294,7 +320,7 @@ pub fn add_roots(conn: &Connection, input: &[String], seen: &mut dyn FnMut(&str,
                 let cards: i64 = conn.query_row("SELECT COUNT(*) FROM card WHERE deck_path = ?1 COLLATE NOCASE", params![path], |r| r.get(0))?;
                 let empty = result.is_ok() && root_view(conn, &path, true)?.video + root_view(conn, &path, true)?.photo == 0;
                 if empty || ((stopped || result.is_err()) && cards == 0) {
-                    conn.execute("DELETE FROM review_root WHERE review_id = ?1 AND path = ?2", params![id, path])?;
+                    conn.execute("DELETE FROM review_root WHERE review_id = ?1 AND path = ?2", params![target, path])?;
                 }
                 if stopped {
                     break;
@@ -303,12 +329,15 @@ pub fn add_roots(conn: &Connection, input: &[String], seen: &mut dyn FnMut(&str,
                     errors.push(err(&path, &e.code, e.message, None));
                 } else if empty {
                     errors.push(err(&path, "NO_MEDIA", "Видео и фото здесь нет".into(), None));
+                } else if target != id {
+                    merged.push(Merged { name: paths::name(&path), path: path.clone(), review_id: target, label: label(conn, target)? });
                 }
             }
         }
     }
     let mut d = draft(conn)?;
     d.errors = errors;
+    d.merged = merged;
     Ok(d)
 }
 
@@ -319,11 +348,13 @@ pub fn remove_root(conn: &Connection, path: &str) -> AppResult<Draft> {
 }
 
 pub fn set_table(conn: &Connection, raw: &str) -> AppResult<Draft> {
+    purge_hidden(conn, None)?;
     let path = paths::canon(raw);
     let id = draft_id(conn)?;
     if !Path::new(&path).is_dir() {
         let mut d = draft(conn)?;
-        d.errors.push(err(&path, "NOT_FOLDER", "Такой папки нет — выбери другую".into(), None));
+        let text = if Path::new(&path).is_file() { "Это файл — перетащи папку" } else { "Такой папки нет — выбери другую" };
+        d.errors.push(err(&path, "NOT_FOLDER", text.into(), None));
         return Ok(d);
     }
     let roots = root_paths(conn, id)?;
@@ -377,6 +408,7 @@ fn view(conn: &Connection, id: i64) -> AppResult<ReviewView> {
         total: left + placed,
         opened_at: opened_at.unwrap_or(0),
         next,
+        empty: 0,
     })
 }
 
@@ -388,31 +420,105 @@ pub fn recheck(conn: &Connection) -> AppResult<()> {
     Ok(())
 }
 
-pub fn list(conn: &Connection) -> AppResult<Vec<ReviewView>> {
-    let ids: Vec<i64> = conn
-        .prepare("SELECT id FROM review WHERE started = 1 ORDER BY COALESCE(opened_at, created_at) DESC")?
-        .query_map([], |r| r.get(0))?
+pub fn list(conn: &Connection) -> AppResult<(Vec<ReviewView>, Vec<ReviewView>)> {
+    let ids: Vec<(i64, bool)> = conn
+        .prepare("SELECT id, tidied FROM review WHERE started = 1 AND hidden = 0 ORDER BY COALESCE(opened_at, created_at) DESC")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<Result<_, _>>()?;
-    let mut out = Vec::new();
-    for id in ids {
+    let (mut out, mut tidy) = (Vec::new(), Vec::new());
+    for (id, tidied) in ids {
         if unfinished(conn, id)? {
             out.push(view(conn, id)?);
+        } else if !tidied && root_paths(conn, id)?.iter().all(|(_, online)| *online) {
+            let n = empty_dirs(conn, id)?.len();
+            if n == 0 {
+                keep_dirs(conn, id)?;
+            } else {
+                let mut v = view(conn, id)?;
+                v.empty = n;
+                tidy.push(v);
+            }
         }
     }
-    Ok(out)
+    Ok((out, tidy))
 }
 
 pub fn home(conn: &Connection) -> AppResult<Home> {
     recheck(conn)?;
-    let reviews = list(conn)?;
+    let (reviews, tidy) = list(conn)?;
     let last = reviews.first().map(|r| r.id);
-    Ok(Home { draft: draft(conn)?, reviews, last })
+    Ok(Home { draft: draft(conn)?, reviews, tidy, last })
+}
+
+pub fn table_path_of(conn: &Connection, id: i64) -> AppResult<String> {
+    let table: Option<String> = conn.query_row("SELECT table_path FROM review WHERE id = ?1", params![id], |r| r.get(0)).optional()?.flatten();
+    table.ok_or_else(|| AppError::new("NO_REVIEW", "Этого разбора больше нет"))
+}
+
+pub fn keep_dirs(conn: &Connection, id: i64) -> AppResult<()> {
+    conn.execute("UPDATE review SET tidied = 1 WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+fn purge_hidden(conn: &Connection, except: Option<i64>) -> rusqlite::Result<()> {
+    conn.execute("DELETE FROM review WHERE hidden = 1 AND id IS NOT ?1", params![except])?;
+    Ok(())
+}
+
+pub fn restore_review(conn: &Connection, id: i64) -> AppResult<()> {
+    if conn.execute("UPDATE review SET hidden = 0 WHERE id = ?1 AND hidden = 1", params![id])? == 0 {
+        return Err(AppError::new("NO_REVIEW", "Этого разбора больше нет"));
+    }
+    Ok(())
+}
+
+pub fn relocate(conn: &Connection, id: i64, old: &str, raw: &str) -> AppResult<()> {
+    let new = paths::canon(raw);
+    let p = Path::new(&new);
+    if !p.is_dir() {
+        let text = if p.is_file() { "Это файл — перетащи папку" } else { "Такой папки нет — выбери другую" };
+        return Err(AppError::new("NOT_FOLDER", text));
+    }
+    if fs::read_dir(p).is_err() {
+        return Err(AppError::new("NO_ACCESS", "Не получается прочитать эту папку — проверь доступ"));
+    }
+    let known: bool = conn
+        .prepare("SELECT 1 FROM review_root WHERE review_id = ?1 AND path = ?2 COLLATE NOCASE")?
+        .exists(params![id, old])?;
+    if !known {
+        return Err(AppError::new("NO_REVIEW", "Этой папки в разборе уже нет"));
+    }
+    if table_of(conn, id)?.iter().any(|t| paths::same(t, &new) || paths::is_inside(&new, t) || paths::is_inside(t, &new)) {
+        return Err(AppError::new("INSIDE_TABLE", "Здесь стол или папка в нём — перетащи папку, которую разбирал"));
+    }
+    for (root, review, _) in all_roots(conn)? {
+        if paths::same(&root, old) {
+            continue;
+        }
+        if paths::same(&root, &new) || paths::is_inside(&new, &root) || paths::is_inside(&root, &new) {
+            let l = label(conn, review)?;
+            return Err(AppError::new("IN_REVIEW", format!("Эта папка уже в разборе «{l}»")));
+        }
+    }
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
+    tx.execute("UPDATE OR IGNORE card SET deck_path = ?2 WHERE deck_path = ?1 COLLATE NOCASE", params![old, new])?;
+    tx.execute("UPDATE review_root SET path = ?3, online = 1 WHERE review_id = ?1 AND path = ?2 COLLATE NOCASE", params![id, old, new])?;
+    tx.execute(
+        "UPDATE move_item SET from_path = ?2 || substr(from_path, length(?1) + 1)
+         WHERE lower(substr(from_path, 1, length(?1) + 1)) = lower(?1 || '\\')",
+        params![old.trim_end_matches('\\'), new.trim_end_matches('\\')],
+    )?;
+    tx.commit()?;
+    let stop = AtomicBool::new(false);
+    deck::sync_seen(conn, &new, &stop, &mut |_| {})?;
+    Ok(())
 }
 
 pub fn start(conn: &Connection) -> AppResult<ReviewView> {
     if READING.lock().is_ok_and(|r| r.is_some()) {
         return Err(AppError::new("READING", "Папки ещё читаются — подожди"));
     }
+    purge_hidden(conn, None)?;
     let id = draft_id(conn)?;
     let table: Option<String> = conn.query_row("SELECT table_path FROM review WHERE id = ?1", params![id], |r| r.get(0))?;
     let Some(table) = table else {
@@ -432,6 +538,7 @@ pub fn start(conn: &Connection) -> AppResult<ReviewView> {
 }
 
 pub fn open(conn: &Connection, id: i64) -> AppResult<ReviewView> {
+    purge_hidden(conn, None)?;
     let table: Option<Option<String>> =
         conn.query_row("SELECT table_path FROM review WHERE id = ?1 AND started = 1", params![id], |r| r.get(0)).optional()?;
     let Some(table) = table else {
@@ -447,7 +554,8 @@ pub fn open(conn: &Connection, id: i64) -> AppResult<ReviewView> {
 }
 
 pub fn drop_review(conn: &Connection, id: i64) -> AppResult<()> {
-    conn.execute("DELETE FROM review WHERE id = ?1 AND started = 1", params![id])?;
+    purge_hidden(conn, Some(id))?;
+    conn.execute("UPDATE review SET hidden = 1 WHERE id = ?1 AND started = 1", params![id])?;
     if get_setting(conn, "review_id")?.as_deref() == Some(&id.to_string()) {
         conn.execute("DELETE FROM settings WHERE key = 'review_id'", [])?;
     }
@@ -455,6 +563,7 @@ pub fn drop_review(conn: &Connection, id: i64) -> AppResult<()> {
 }
 
 pub fn close(conn: &Connection) -> AppResult<()> {
+    purge_hidden(conn, None)?;
     conn.execute("DELETE FROM settings WHERE key = 'review_id'", [])?;
     Ok(())
 }
@@ -643,11 +752,78 @@ mod tests {
         assert_eq!(deck::window(&conn, 0, 10, "all").unwrap().len(), 5);
         let d = add_roots(&conn, &[format!("{root}\\2ch\\t2")], &mut |_, _| {}).unwrap();
         assert_eq!(d.errors[0].code, "IN_REVIEW");
-        assert_eq!(list(&conn).unwrap().len(), 1);
+        assert_eq!(list(&conn).unwrap().0.len(), 1);
         conn.execute("UPDATE card SET status = 'placed'", []).unwrap();
-        assert!(list(&conn).unwrap().is_empty());
+        assert!(list(&conn).unwrap().0.is_empty());
         let d = add_roots(&conn, &[format!("{root}\\2ch\\t2")], &mut |_, _| {}).unwrap();
         assert!(d.errors.is_empty() && d.roots.len() == 1);
+    }
+
+    #[test]
+    fn parent_joins_started_review() {
+        let (_d, conn, root) = setup();
+        set_table(&conn, &format!("{root}\\table")).unwrap();
+        add_roots(&conn, &[format!("{root}\\2ch\\t1")], &mut |_, _| {}).unwrap();
+        let r = start(&conn).unwrap();
+        conn.execute("UPDATE card SET status = 'placed' WHERE file_name = '0.mp4'", []).unwrap();
+        fs::remove_file(Path::new(&root).join("2ch\\t1\\0.mp4")).unwrap();
+        let d = add_roots(&conn, &[format!("{root}\\2ch")], &mut |_, _| {}).unwrap();
+        assert!(d.errors.is_empty() && d.roots.is_empty());
+        assert_eq!((d.merged[0].review_id, d.merged[0].name.as_str()), (r.id, "2ch"));
+        let v = list(&conn).unwrap().0;
+        assert_eq!((v[0].label.as_str(), v[0].left, v[0].total), ("2ch", 4, 5));
+    }
+
+    #[test]
+    fn moved_root_is_found_again() {
+        let (_d, conn, root) = setup();
+        set_table(&conn, &format!("{root}\\table")).unwrap();
+        let old = format!("{root}\\2ch\\t2");
+        add_roots(&conn, std::slice::from_ref(&old), &mut |_, _| {}).unwrap();
+        let r = start(&conn).unwrap();
+        let new = format!("{root}\\2ch\\t2-moved");
+        fs::rename(&old, &new).unwrap();
+        recheck(&conn).unwrap();
+        assert_eq!(list(&conn).unwrap().0[0].gone.as_deref(), Some(old.as_str()));
+        assert_eq!(relocate(&conn, r.id, &old, &format!("{root}\\table\\Мемы")).unwrap_err().code, "INSIDE_TABLE");
+        assert_eq!(relocate(&conn, r.id, &old, &format!("{root}\\2ch\\nope")).unwrap_err().code, "NOT_FOLDER");
+        relocate(&conn, r.id, &old, &new).unwrap();
+        let v = list(&conn).unwrap().0;
+        assert_eq!((v[0].gone.clone(), v[0].left, v[0].online), (None, 3, true));
+    }
+
+    #[test]
+    fn dropped_review_comes_back_until_next_step() {
+        let (_d, conn, root) = setup();
+        set_table(&conn, &format!("{root}\\table")).unwrap();
+        add_roots(&conn, &[format!("{root}\\2ch")], &mut |_, _| {}).unwrap();
+        let r = start(&conn).unwrap();
+        drop_review(&conn, r.id).unwrap();
+        assert!(list(&conn).unwrap().0.is_empty());
+        restore_review(&conn, r.id).unwrap();
+        assert_eq!(list(&conn).unwrap().0.len(), 1);
+        drop_review(&conn, r.id).unwrap();
+        close(&conn).unwrap();
+        assert_eq!(restore_review(&conn, r.id).unwrap_err().code, "NO_REVIEW");
+        let d = add_roots(&conn, &[format!("{root}\\2ch")], &mut |_, _| {}).unwrap();
+        assert!(d.errors.is_empty() && d.roots.len() == 1);
+    }
+
+    #[test]
+    fn finished_review_offers_empty_dirs_once() {
+        let (_d, conn, root) = setup();
+        set_table(&conn, &format!("{root}\\table")).unwrap();
+        add_roots(&conn, &[format!("{root}\\2ch")], &mut |_, _| {}).unwrap();
+        start(&conn).unwrap();
+        conn.execute("UPDATE card SET status = 'placed'", []).unwrap();
+        for f in ["0.mp4", "1.mp4"] {
+            fs::remove_file(Path::new(&root).join("2ch\\t1").join(f)).unwrap();
+        }
+        let (open, tidy) = list(&conn).unwrap();
+        assert!(open.is_empty());
+        assert_eq!(tidy[0].empty, 1);
+        keep_dirs(&conn, tidy[0].id).unwrap();
+        assert!(list(&conn).unwrap().1.is_empty());
     }
 
     #[test]

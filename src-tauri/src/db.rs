@@ -204,6 +204,12 @@ pub fn init(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
     allow_dir_moves(conn)?;
+    for col in ["tidied", "hidden"] {
+        let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('review') WHERE name = ?1")?.exists(params![col])?;
+        if !has {
+            conn.execute(&format!("ALTER TABLE review ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0"), [])?;
+        }
+    }
     if get_setting(conn, "schema_version")?.is_none() {
         conn.execute(
             "INSERT OR IGNORE INTO settings(key, value) VALUES ('schema_version', ?1)",

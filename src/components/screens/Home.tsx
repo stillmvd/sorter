@@ -1,7 +1,7 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Folder, FolderPlus, History, RefreshCw, Settings, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Folder, FolderPlus, History, RefreshCw, Settings, Undo2, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   errorText,
   frameSrc,
@@ -13,6 +13,7 @@ import {
   type Card,
   type Draft,
   type Home as HomeData,
+  type Merged,
   type ReviewView,
   type RootView,
 } from "../../lib/ipc";
@@ -22,12 +23,13 @@ import { IconButton } from "../ui/IconButton";
 import { Heading } from "../ui/PageHeader";
 import { Toggle } from "../ui/Toggle";
 
-type Zone = "src" | "dst";
+type Zone = "src" | "dst" | `r:${number}`;
 
 const drive = (path: string) => path.slice(0, 2);
 const goneText = (path: string) => `Папки нет — подключи диск ${drive(path)}`;
 const cards = (n: number) => `${nf(n)} ${plural(n, "карта", "карты", "карт")}`;
 const folders = (n: number) => `${n} ${plural(n, "папку", "папки", "папок")}`;
+const movable = (r: ReviewView) => !!r.gone && r.roots.some((x) => x.path.toLowerCase() === r.gone?.toLowerCase());
 
 function counts(r: RootView) {
   const parts: string[] = [];
@@ -172,8 +174,12 @@ export function Home({
   const [found, setFound] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState(false);
   const [over, setOver] = useState<{ zone: Zone; count: number } | null>(null);
+  const [dropped, setDropped] = useState<{ r: ReviewView; at: number } | null>(null);
+  const [merged, setMerged] = useState<Merged[]>([]);
+  const [tidying, setTidying] = useState<number | null>(null);
   const dragCount = useRef(0);
   const known = useRef(new Set<string>());
+  const goneReviews = useRef<ReviewView[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -207,6 +213,8 @@ export function Home({
   const apply = useCallback(
     (d: Draft) => {
       setErrors(d.errors);
+      setDropped(null);
+      if (d.merged.length) setMerged((m) => [...m, ...d.merged]);
       setData((h) => (h ? { ...h, draft: d } : h));
       known.current = new Set(d.roots.map((r) => r.path.toLowerCase()));
       onChange();
@@ -231,6 +239,7 @@ export function Home({
   const addRoots = useCallback(
     (paths: string[]) => {
       if (!paths.length) return queue.current;
+      if (pending.current === 0) setMerged([]);
       pending.current += 1;
       setBusy(true);
       queue.current = queue.current.then(async () => {
@@ -248,6 +257,21 @@ export function Home({
   );
 
   const setTable = useCallback((path: string) => run(() => ipc.setDraftTable(path)), [run]);
+
+  const relocate = useCallback(async (r: ReviewView, path: string) => {
+    if (!r.gone) return;
+    setFailure(null);
+    try {
+      setData(await ipc.relocateRoot(r.id, r.gone, path));
+    } catch (e) {
+      setFailure(errorText(e));
+    }
+  }, []);
+
+  const pickMoved = async (r: ReviewView) => {
+    const path = await open({ directory: true, title: `Где теперь папка «${r.label}»?` });
+    if (typeof path === "string") await relocate(r, path);
+  };
 
   const taken = useRef<string[] | null>(null);
   useEffect(() => {
@@ -283,17 +307,27 @@ export function Home({
       } else {
         setOver(null);
         const zone = zoneAt(payload.position.x, payload.position.y);
+        const path = payload.paths[0];
         if (zone === "src") void addRoots(payload.paths);
-        else if (zone === "dst" && payload.paths[0]) void setTable(payload.paths[0]);
+        else if (zone === "dst" && path) void setTable(path);
+        else if (zone?.startsWith("r:") && path) {
+          const r = goneReviews.current.find((x) => `r:${x.id}` === zone);
+          if (r) void relocate(r, path);
+        }
       }
     });
     return () => void off.then((f) => f());
-  }, [addRoots, setTable]);
+  }, [addRoots, setTable, relocate]);
 
   const draft = data?.draft;
   const roots = draft?.roots ?? [];
   const table = draft?.table ?? null;
-  const reviews = data?.reviews ?? [];
+  const reviews = useMemo(() => {
+    const into = new Set(merged.map((m) => m.reviewId));
+    return (data?.reviews ?? []).filter((r) => r.id !== dropped?.r.id).sort((a, b) => Number(into.has(b.id)) - Number(into.has(a.id)));
+  }, [data, merged, dropped]);
+  const tidy = data?.tidy ?? [];
+  goneReviews.current = reviews.filter(movable);
   const reading = busy || roots.some((r) => r.reading !== null);
   const gone = roots.find((r) => !r.online) ?? (table && !table.online ? { path: table.path } : undefined);
   const ready = roots.length > 0 && !!table && !reading && !gone;
@@ -326,12 +360,41 @@ export function Home({
   );
 
   const drop = useCallback(
-    async (r: ReviewView) => {
+    async (r: ReviewView, at: number) => {
+      setFailure(null);
       try {
         await ipc.dropReview(r.id);
+        setDropped({ r, at });
       } catch (e) {
         setFailure(errorText(e));
       }
+      void load();
+    },
+    [load],
+  );
+
+  const restore = useCallback(async () => {
+    if (!dropped) return;
+    try {
+      await ipc.restoreReview(dropped.r.id);
+      await load();
+    } catch (e) {
+      setFailure(errorText(e));
+      void load();
+    }
+    setDropped(null);
+  }, [dropped, load]);
+
+  const tidyUp = useCallback(
+    async (r: ReviewView, keep: boolean) => {
+      setFailure(null);
+      setTidying(r.id);
+      try {
+        await (keep ? ipc.keepDirs(r.id) : ipc.tidyReview(r.id));
+      } catch (e) {
+        setFailure(errorText(e));
+      }
+      setTidying(null);
       void load();
     },
     [load],
@@ -366,6 +429,9 @@ export function Home({
           e.preventDefault();
           void resume(reviews[0]);
         }
+      } else if (e.ctrlKey && e.code === "KeyZ" && dropped) {
+        e.preventDefault();
+        void restore();
       } else if (e.ctrlKey && e.code === "KeyJ") {
         e.preventDefault();
         onJournal();
@@ -376,12 +442,10 @@ export function Home({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [reading, ready, resumeOnEnter, reviews, start, resume, onJournal, onSettings]);
+  }, [reading, ready, resumeOnEnter, reviews, start, resume, dropped, restore, onJournal, onSettings]);
 
   let note = "";
   if (gone) note = `Подключи диск ${drive(gone.path)} или убери папку`;
-  else if (!roots.length && !table) note = resumeOnEnter ? "" : "Сначала выбери папки";
-  else if (!roots.length) note = resumeOnEnter ? "" : "Сначала выбери папку для разбора";
   else if (!table) note = "Сначала выбери стол";
 
   const hints = state.settings.hints_enabled === "1";
@@ -393,7 +457,14 @@ export function Home({
 
   const srcOver = over?.zone === "src";
   const dstOver = over?.zone === "dst";
-  const first = reviews[0];
+  const first = reviews[0]?.online ? reviews[0] : null;
+  const rest: { r: ReviewView; undo: boolean }[] = reviews.filter((r) => r !== first).map((r) => ({ r, undo: false }));
+  if (dropped) rest.splice(Math.min(rest.length, Math.max(0, dropped.at - (first ? 1 : 0))), 0, { r: dropped.r, undo: true });
+  const into = first ? merged.filter((m) => m.reviewId === first.id) : [];
+  const placed = first ? first.total - first.left : 0;
+  const mergedNote = into.length
+    ? `Добавил ${into.map((m) => m.name).join(", ")} к начатому разбору ${first?.label}${placed ? ` · ${cards(placed)} уже ${plural(placed, "разложена", "разложены", "разложено")}` : ""}`
+    : "";
 
   return (
     <main className="mx-2 mb-2 flex min-h-0 flex-1">
@@ -453,6 +524,12 @@ export function Home({
                     Добавить папку
                   </Button>
                   <span className="text-[13px] text-dim">или перетащи из Проводника</span>
+                  <div className="hm-go">
+                    {note && <span className="text-[13px] text-dim">{note}</span>}
+                    <Button size={40} variant="primary" hotkey={ready ? "Enter" : undefined} disabled={!ready} onClick={() => void start()}>
+                      Разобрать
+                    </Button>
+                  </div>
                 </div>
               </>
             )}
@@ -523,28 +600,53 @@ export function Home({
           </div>
         )}
 
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-5 gap-y-2.5">
-          {note && <span className="text-[13px] whitespace-nowrap text-dim">{note}</span>}
-          <Button size={48} variant="primary" hotkey={ready ? "Enter" : undefined} disabled={!ready} onClick={() => void start()}>
-            Разобрать
-          </Button>
-        </div>
-
         <div className="flex-1" />
 
-        {first && (
+        {tidy.length > 0 && (
+          <div className="flex shrink-0 flex-col gap-3">
+            <span className="hm-lbl text-[13px]">Разбор закончен</span>
+            {tidy.map((t) => (
+              <div key={t.id} className="hm-tidy">
+                <span className="n">
+                  <b>{nf(t.empty)}</b>
+                  <span>{plural(t.empty, "пустая папка", "пустые папки", "пустых папок")}</span>
+                </span>
+                <span className="tx">
+                  <Name r={t} />
+                  <span className="text-[13px] text-dim">Разложено всё: {cards(t.total)}</span>
+                  <span className="ft">
+                    <Button variant="primary" disabled={tidying === t.id} onClick={() => void tidyUp(t, false)}>
+                      Убрать {folders(t.empty)}
+                    </Button>
+                    <Button className="bg-strong! hover:bg-line!" disabled={tidying === t.id} onClick={() => void tidyUp(t, true)}>
+                      Не убирать
+                    </Button>
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {(first || rest.length > 0) && (
           <div className="flex shrink-0 flex-col gap-3">
             <span className="hm-lbl text-[13px]">Продолжить разбор</span>
             <div className="hm-rstack">
-              {first.online ? (
+              {first && (
                 <div className="hm-rbig">
                   <Thumb cacheDir={state.cacheDir} card={first.next} />
                   <span className="tx">
                     <span className="flex min-w-0 items-center gap-2">
                       <Name r={first} />
                       <span className="flex-1" />
-                      <Remove label="Убрать разбор" onClick={() => void drop(first)} />
+                      <Remove label="Убрать разбор" onClick={() => void drop(first, 0)} />
                     </span>
+                    {mergedNote && (
+                      <span className="hm-note">
+                        <FolderPlus size={14} strokeWidth={1.5} />
+                        {mergedNote}
+                      </span>
+                    )}
                     <div className="hm-left">
                       <b>{nf(first.left)}</b>
                       <span>осталось из {nf(first.total)}</span>
@@ -558,41 +660,79 @@ export function Home({
                     </span>
                   </span>
                 </div>
-              ) : null}
-              {(first.online ? reviews.slice(1) : reviews).length > 0 && (
+              )}
+              {rest.length > 0 && (
                 <div className="hm-rrs">
-                  {(first.online ? reviews.slice(1) : reviews).map((r) => (
-                    <div
-                      key={r.id}
-                      role="button"
-                      tabIndex={0}
-                      className={`hm-rr cursor-pointer${r.online ? "" : " gone"}`}
-                      onClick={() => r.online && void resume(r)}
-                      onKeyDown={(e) => e.key === " " && r.online && void resume(r)}
-                    >
-                      <span className="tx">
-                        <Name r={r} />
-                        {r.online ? (
-                          <span className="sub">
-                            осталось {nf(r.left)} из {nf(r.total)} · {day(r.openedAt)}
+                  {rest.map((it) => {
+                    const r = it.r;
+                    if (it.undo)
+                      return (
+                        <div key={`u${r.id}`} role="status" className="hm-rr undo">
+                          <span className="tx">
+                            <span className="hm-nm">Разбор «{r.label}» убран</span>
                           </span>
-                        ) : (
-                          <span className="sub hm-err">
-                            {goneText(r.gone ?? r.roots[0]?.path ?? "")} · {day(r.openedAt)}
+                          <Button size={36} className="bg-strong! hover:bg-line!" icon={<Undo2 size={15} strokeWidth={1.5} />} hotkey="Ctrl Z" onClick={() => void restore()}>
+                            Вернуть
+                          </Button>
+                        </div>
+                      );
+                    const at = reviews.indexOf(r);
+                    const zone = movable(r) ? (`r:${r.id}` as const) : undefined;
+                    const hot = !!zone && over?.zone === zone;
+                    return (
+                      <div
+                        key={r.id}
+                        role="button"
+                        tabIndex={0}
+                        data-drop={zone}
+                        className={`hm-rr cursor-pointer${r.online ? "" : " gone"}${hot ? " over" : ""}`}
+                        onClick={() => r.online && void resume(r)}
+                        onKeyDown={(e) => e.key === " " && r.online && void resume(r)}
+                      >
+                        <span className="tx">
+                          <Name r={r} />
+                          {hot ? (
+                            <span className="hm-drop">
+                              <FolderPlus size={14} strokeWidth={1.5} />
+                              Отпусти — продолжу разбор из этой папки
+                            </span>
+                          ) : r.online ? (
+                            <span className="sub">
+                              осталось {nf(r.left)} из {nf(r.total)} · {day(r.openedAt)}
+                            </span>
+                          ) : (
+                            <span className="sub hm-err">
+                              {goneText(r.gone ?? r.roots[0]?.path ?? "")} · {day(r.openedAt)}
+                            </span>
+                          )}
+                          {!r.online && !hot && (
+                            <span className="btns">
+                              <Again onClick={() => void recheck()} />
+                              {zone && (
+                                <Button
+                                  size={36}
+                                  className="bg-strong! hover:bg-line!"
+                                  icon={<Folder size={15} strokeWidth={1.5} />}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void pickMoved(r);
+                                  }}
+                                >
+                                  Указать папку
+                                </Button>
+                              )}
+                            </span>
+                          )}
+                        </span>
+                        {r.online && <Bar r={r} />}
+                        {!hot && (
+                          <span className="flex shrink-0 items-center gap-1">
+                            <Remove label="Убрать разбор" onClick={() => void drop(r, at)} />
                           </span>
                         )}
-                        {!r.online && (
-                          <span className="pt-1">
-                            <Again onClick={() => void recheck()} />
-                          </span>
-                        )}
-                      </span>
-                      {r.online && <Bar r={r} />}
-                      <span className="flex shrink-0 items-center gap-1">
-                        <Remove label="Убрать разбор" onClick={() => void drop(r)} />
-                      </span>
-                    </div>
-                  ))}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -602,4 +742,3 @@ export function Home({
     </main>
   );
 }
-

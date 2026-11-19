@@ -425,7 +425,11 @@ fn table_path(conn: &Connection) -> AppResult<String> {
 }
 
 fn trash_pile(conn: &Connection) -> AppResult<i64> {
-    conn.query_row("SELECT id FROM pile WHERE table_path = ?1 AND is_trash = 1", params![table_path(conn)?], |r| r.get(0))
+    trash_of(conn, &table_path(conn)?)
+}
+
+fn trash_of(conn: &Connection, table: &str) -> AppResult<i64> {
+    conn.query_row("SELECT id FROM pile WHERE table_path = ?1 AND is_trash = 1", params![table], |r| r.get(0))
         .optional()?
         .ok_or_else(|| AppError::new("PILE_GONE", "Корзины нет — открой стол заново."))
 }
@@ -445,6 +449,11 @@ fn deck_card(conn: &Connection, path: &Path) -> AppResult<Option<i64>> {
 
 pub fn trash_dirs(conn: &mut Connection, dirs: &[PathBuf]) -> AppResult<MoveView> {
     let trash = trash_pile(conn)?;
+    move_with(conn, &[], dirs, trash, "dirs", None, safe_rename)
+}
+
+pub fn trash_dirs_in(conn: &mut Connection, table: &str, dirs: &[PathBuf]) -> AppResult<MoveView> {
+    let trash = trash_of(conn, table)?;
     move_with(conn, &[], dirs, trash, "dirs", None, safe_rename)
 }
 
