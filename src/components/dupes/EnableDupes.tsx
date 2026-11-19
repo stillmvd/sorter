@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { plural } from "../../lib/plural";
 import { filesWord, useEstimate } from "../screens/DupesStep";
 import { Button } from "../ui/Button";
@@ -18,6 +18,19 @@ export function useModalKeys(fn: (e: KeyboardEvent) => void) {
   }, []);
 }
 
+export const modalSheet = "fixed inset-x-0 top-12 bottom-0 z-40 m-0 h-auto max-h-none w-auto max-w-none overflow-visible border-0 p-0 text-fg backdrop:bg-transparent";
+
+export function useModal() {
+  const ref = useRef<HTMLDialogElement>(null);
+  useLayoutEffect(() => {
+    const d = ref.current;
+    if (!d) return;
+    d.showModal();
+    return () => d.close();
+  }, []);
+  return ref;
+}
+
 export function EnableDupes({
   scope: initial,
   piles,
@@ -33,6 +46,7 @@ export function EnableDupes({
   const deck = useEstimate("deck", true, "");
   const all = useEstimate("all", true, "");
   const minutes = (scope === "deck" ? deck : all)?.minutes ?? 0;
+  const dialog = useModal();
 
   useModalKeys((e) => {
     if (e.key === "Escape") onClose();
@@ -54,11 +68,14 @@ export function EnableDupes({
   ];
 
   return (
-    <div className="fixed inset-x-0 top-12 bottom-0 z-40 grid place-items-center bg-[rgb(8_8_10/52%)]" onClick={onClose}>
+    <dialog
+      ref={dialog}
+      aria-label="Где искать дубли"
+      className={`${modalSheet} place-items-center bg-[rgb(8_8_10/52%)] open:grid`}
+      onCancel={(e) => e.preventDefault()}
+      onClick={onClose}
+    >
       <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="Где искать дубли"
         onClick={(e) => e.stopPropagation()}
         className="flex w-[560px] max-w-[calc(100%-32px)] flex-col gap-4 rounded-[28px] bg-cosmic px-7 pt-[26px] pb-6 shadow-[0_30px_80px_rgb(0_0_0/45%),0_0_0_1px_var(--line)]"
       >
@@ -102,6 +119,6 @@ export function EnableDupes({
           </Button>
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }

@@ -6,7 +6,7 @@ import { nf, plural } from "../../lib/plural";
 import { filesWord } from "../screens/DupesStep";
 import { Button } from "../ui/Button";
 import { Kbd } from "../ui/Kbd";
-import { useModalKeys } from "./EnableDupes";
+import { modalSheet, useModal, useModalKeys } from "./EnableDupes";
 
 export type SearchSet = { piles: string[]; deck: boolean; folders: string[] };
 
@@ -73,6 +73,8 @@ export function FindDupes({
     if (!empty && (preview?.total ?? 0) > 0) onStart(set);
   };
 
+  const dialog = useModal();
+
   useModalKeys((e) => {
     if (e.key === "Escape") onClose();
     else if (e.key === "Enter") start();
@@ -86,12 +88,14 @@ export function FindDupes({
   const all = picked.length === names.length;
 
   return (
-    <>
-      <div className="fixed inset-x-0 top-12 bottom-0 z-40 bg-[rgb(8_8_10/30%)]" onClick={onClose} />
+    <dialog
+      ref={dialog}
+      aria-label="Найти дубли"
+      className={`${modalSheet} bg-[rgb(8_8_10/30%)]`}
+      onCancel={(e) => e.preventDefault()}
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+    >
       <aside
-        role="dialog"
-        aria-modal="true"
-        aria-label="Найти дубли"
         className="fixed top-14 right-2 bottom-2 z-40 flex w-[430px] flex-col gap-4 overflow-y-auto rounded-[28px] bg-cosmic px-6 pt-6 pb-5 shadow-[-24px_0_60px_rgb(0_0_0/40%),0_0_0_1px_var(--line)] [--scroll-inset:20px]"
       >
         <h2 className="text-[28px] leading-[1.1] tracking-[-0.02em]">
@@ -232,6 +236,6 @@ export function FindDupes({
           </Button>
         </div>
       </aside>
-    </>
+    </dialog>
   );
 }
